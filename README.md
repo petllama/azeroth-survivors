@@ -2,6 +2,12 @@
 
 A Vampire Survivors-style arcade game that runs inside WoW: Forever as an addon. Survive the Scourge for 10 minutes; spells cast themselves, you move and pick upgrades.
 
+## Install
+
+Download `AzerothSurvivors-<version>.zip` from [Releases](https://github.com/petllama/azeroth-survivors/releases) and unzip it into `World of Warcraft/_forever_/Interface/AddOns/` so you get `AddOns/AzerothSurvivors/AzerothSurvivors.toc`. A first install needs a full game restart; updates need `/reload`.
+
+Built for WoW: Forever (interface 16001, a retail-based client). It uses only plain frames and textures, so it may work on other retail-based clients with the `## Interface` line changed; untested.
+
 ## Play
 
 - `/azs` (or `/survivors`, or the addon compartment button) opens the window. `SPACE` starts a run.
@@ -28,3 +34,7 @@ Other commands: `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (s
 ## Performance
 
 Sim cost (Lua 5.1 offline, this machine): ~0.1 ms per frame in normal play, ~0.45 ms with 600 enemies. Drawing is one SetPoint per visible entity; check the real cost in game with `/azs debug` and `/azs stress N`.
+
+## License
+
+MIT (see `LICENSE`). Sprites are original images generated locally with FLUX; World of Warcraft spell icons are referenced from the game client, not redistributed. Not affiliated with Blizzard Entertainment.
