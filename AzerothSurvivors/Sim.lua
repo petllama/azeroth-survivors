@@ -25,7 +25,7 @@ function Sim.New(opts)
   local cls = C.CLASSES[opts.class or "paladin"] and (opts.class or "paladin") or "paladin"
   local cd = C.CLASSES[cls]
   local S = {
-    class = cls, cdef = cd, impacts = {}, nImp = 0,
+    class = cls, cdef = cd, impacts = {}, nImp = 0, xpBank = 0,
     t = 0, kills = 0, state = "play", dmgDone = 0,
     viewR = opts.viewR or 600,
     cap = opts.cap or C.MAX_ENEMIES,
@@ -269,12 +269,14 @@ local function pickKind(t)
   return "ghoul"
 end
 
+-- Crystals left far behind (or over the cap) bank their XP into the next crystal that drops, so it is never lost.
 local function dropGem(S, x, y, xp)
   if S.nG >= C.MAX_GEMS then
-    local g = S.gems[random(S.nG)]
-    g.xp = g.xp + xp
+    S.xpBank = S.xpBank + xp
     return
   end
+  xp = xp + S.xpBank
+  S.xpBank = 0
   local g = tremove(S.gemPool) or {}
   g.x, g.y, g.xp, g.pull, g.dead, g.tex = x + random() * 8 - 4, y + random() * 8 - 4, xp, false, false, nil
   S.nG = S.nG + 1
@@ -553,7 +555,7 @@ function W.strike(S, w, dt)
   w.timer = w.timer - dt
   if w.timer > 0 then return end
   local p, q = S.p, S.q
-  local n = query(S, p.x, p.y, S.viewR * 0.8, q)
+  local n = query(S, p.x, p.y, S.viewR * 0.55, q) -- near enough that the crystals can be collected
   if n == 0 then w.timer = 0.2; return end
   w.timer = w.cd * p.haste
   for _ = 1, w.count do
@@ -720,12 +722,16 @@ function Sim.Step(S, dt, ix, iy)
   -- gems
   local G = S.gems
   local mag2 = p.magnet * p.magnet
+  local lost2 = (S.viewR * 1.5) ^ 2
   local pull = 420 * dt
   for i = 1, S.nG do
     local g = G[i]
     local dx, dy = p.x - g.x, p.y - g.y
     local d2 = dx * dx + dy * dy
-    if g.pull or d2 < mag2 then
+    if d2 > lost2 then
+      g.dead = true
+      S.xpBank = S.xpBank + g.xp
+    elseif g.pull or d2 < mag2 then
       g.pull = true
       local d = sqrt(d2)
       if d < p.r + 6 then
