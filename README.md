@@ -17,7 +17,11 @@ Built for WoW: Forever (interface 16001, a retail-based client). It uses only pl
 
 On the game-over screen `SPACE` replays the same class and `C` returns to class select.
 
-Other commands: `/azs anim` (movement animations on/off), `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (stress test with 600 enemies, invulnerable), `/azs numbers` (damage numbers on/off), `/azs scale 0.8`, `/azs reset` (window position).
+**Pause and quick save:** `P` / `ESC` or the Pause button pause; `F6` quick saves, `F9` quick loads (one slot, kept across `/reload` and logout; a run in progress is also saved on logout). A saved run shows as **Continue** on the class screen.
+
+**Flights:** like Polestar's Freedoom Arcade. On a flight with a minute or more to go (out of combat, outside instances) a small card asks *Do you want to play Azeroth Survivors while waiting?* (Play, Not now, Don't ask again); after that a *Play Azeroth Survivors* button stays while you fly. Ten seconds before landing, on landing, or if a fight starts, the run is saved, paused and closed so your keys are yours again. Flight times are learned per route (estimated from the flight map the first time). It sits under Polestar's flight timer when that is shown. `/azs flight` turns the offer on or off.
+
+Other commands: `/azs save` / `/azs load`, `/azs flight`, `/azs anim` (movement animations on/off), `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (stress test with 600 enemies, invulnerable), `/azs numbers` (damage numbers on/off), `/azs scale 0.8`, `/azs reset` (window position).
 
 ## Classes (0.2.0)
 
@@ -38,7 +42,8 @@ Enemies: ghouls, bats, wraiths, brutes, an elite death knight every minute (drop
 - `AzerothSurvivors/Content.lua` data and balance; `Sim.lua` pure-Lua simulation (no WoW API, spatial grid, pooled entities); `Render.lua` pooled textures/lines/numbers; `UI.lua` HUD and panels; `Main.lua` window, keyboard, loop, slash commands.
 - `AzerothSurvivors/Art/*.tga` sprites made with the local FLUX model (`tools/art/`, see its README).
 - `CLASS=rogue tests/run_sim.lua [seed] play|stress [cap]` headless run with a bot (`VACUUM=1` = perfect pickup), prints result and ms per step.
-- `tests/run_addon.lua [seconds]` loads the whole addon on a mock client and plays: open, start, move, level-ups, pause, combat pause, quit, restart, class select and a run with every class, stress.
+- `tests/test_save.lua` save/load round trip for every class.
+- `tests/run_addon.lua [seconds]` loads the whole addon on a mock client and plays: open, start, move, level-ups, pause, combat pause, quit, restart, class select and a run with every class, quick save/load, a mocked flight (card, play, landing guard, learned time, not now, fight, don't ask again), stress.
 - `tools/install.sh` syntax check + offline test, then copies into `_forever_/Interface/AddOns/AzerothSurvivors`. First install (and any new file) needs a full game restart, not `/reload`.
 
 ## Performance

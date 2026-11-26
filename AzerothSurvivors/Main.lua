@@ -2,7 +2,7 @@
 local addonName, ns = ...
 local C, Sim, R, UI = ns.Content, ns.Sim, ns.Render, ns.UI
 
-local DEFAULTS = { anim = true, numbers = true, debug = false, scale = 1, runs = 0, class = "paladin" }
+local DEFAULTS = { anim = true, numbers = true, debug = false, scale = 1, runs = 0, class = "paladin", flightOffer = true }
 local frame, S
 local mode = "title" -- title | play | levelup | pause | over
 local stressCap
@@ -64,11 +64,63 @@ local function startRun()
 end
 
 local function pause(reason)
-  if mode == "play" then mode = "pause"; UI.Pause(reason) end
+  if mode == "play" then mode = "pause"; UI.Pause(reason, ns.db.save) end
 end
 
 local function resume()
   if mode == "pause" then mode = "play"; UI.Show(nil) end
+end
+
+---------------------------------------------------------------------------
+-- quick save / load (one slot, in SavedVariables: survives /reload and logout)
+---------------------------------------------------------------------------
+local function runActive()
+  return S and not S.stress and (S.state == "play" or S.state == "levelup")
+    and (mode == "play" or mode == "pause" or mode == "levelup")
+end
+
+local function saveRun()
+  if not runActive() then return false end
+  local d = Sim.Serialize(S)
+  d.savedAt = time and time() or 0
+  ns.db.save = d
+  return true
+end
+ns.SaveRun = saveRun
+
+local function loadRun()
+  local d = ns.db.save
+  if not d then return false end
+  local S2 = Sim.Deserialize(d, { viewR = viewR(), hooks = hooks })
+  if not S2 then ns.db.save = nil; return false end
+  if S then R.ReleaseAll(S) end
+  S = S2
+  stressCap = nil
+  R.SetClass(C.CLASSES[S.class])
+  UI.HideBoss()
+  if S.state == "levelup" then
+    mode = "levelup"
+    UI.LevelUp(S)
+  else
+    mode = "play"
+    pause("|cff00ff00Saved run loaded.|r  |cffffd100P|r or |cffffd100ESC|r to play.")
+  end
+  R.Draw(S, 0)
+  return true
+end
+
+function ns.QuickSave()
+  if saveRun() then UI.Banner("Game saved", 0.6, 1, 0.6) end
+end
+
+function ns.QuickLoad()
+  if not loadRun() then UI.Banner("No saved game", 1, 0.5, 0.5) end
+end
+
+function ns.SaveInfo()
+  local d = ns.db.save
+  if not d then return nil end
+  return C.CLASSES[d.class].name, d.t, d.p.level
 end
 
 function ns.StartClass(id)
@@ -96,13 +148,54 @@ local function close()
   frame:Hide()
 end
 
+---------------------------------------------------------------------------
+-- for Flight.lua and other addons (same shape as FreedoomArcadeAPI: Open, Close(saveAndPause), IsOpen)
+---------------------------------------------------------------------------
+function ns.IsOpen() return frame and frame:IsShown() and true or false end
+
+function ns.Open()
+  if not frame then return false end
+  if InCombatLockdown() then print("|cffffd100Azeroth Survivors|r: opens after the fight.") return false end
+  frame:Show()
+  return true
+end
+
+-- save, pause and close: closed, saved
+function ns.PutAway()
+  if not ns.IsOpen() then return false, false end
+  pause()
+  local saved = saveRun()
+  close()
+  return true, saved
+end
+
+AzerothSurvivorsAPI = {
+  version = 1,
+  Open = function() return ns.Open() end,
+  Close = function(saveAndPause)
+    if saveAndPause then local _, saved = ns.PutAway(); return saved end
+    if ns.IsOpen() then close() end
+    return false
+  end,
+  IsOpen = function() return ns.IsOpen() end,
+}
+
 -- returns true when the key is ours (not passed on to the game's bindings)
 local function onKey(key, down)
   if MOVE[key] then
     return mode == "play" -- movement is polled with IsKeyDown; outside play the character may walk
   end
   if not down then return key == "ESCAPE" or key == "SPACE" end
-  if key == "ESCAPE" then
+  if key == "F6" then
+    ns.QuickSave()
+    return true
+  elseif key == "F9" then
+    ns.QuickLoad()
+    return true
+  elseif key == "P" and (mode == "play" or mode == "pause") then
+    if mode == "play" then pause() else resume() end
+    return true
+  elseif key == "ESCAPE" then
     if mode == "play" then pause()
     elseif mode == "pause" then resume()
     else close() end -- title, over, levelup (the level-up waits for reopening)
@@ -154,6 +247,13 @@ local function onUpdate(_, elapsed)
       fps, simMs, drawMs, S.nE, S.nP, S.nG, collectgarbage("count"))
   end
   UI.Update(S, elapsed, ns.db.debug and debugLine or nil)
+  if mode ~= frame.shownMode then
+    frame.shownMode = mode
+    local pb = frame.pauseButton
+    if mode == "play" then pb:SetText("Pause"); pb:Enable()
+    elseif mode == "pause" then pb:SetText("Resume"); pb:Enable()
+    else pb:SetText("Pause"); pb:Disable() end
+  end
 end
 
 local function build()
@@ -198,6 +298,15 @@ local function build()
   x:SetPoint("RIGHT", 2, 0)
   x:SetSize(24, 24)
   x:SetScript("OnClick", close)
+  local pb = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+  pb:SetSize(64, 18)
+  pb:SetPoint("RIGHT", x, "LEFT", -4, 0)
+  pb:SetText("Pause")
+  pb:SetScript("OnClick", function()
+    if mode == "play" then pause() elseif mode == "pause" then resume() end
+  end)
+  pb:Disable()
+  frame.pauseButton = pb
 
   R.Init(frame, w, h)
   UI.Init(frame)
@@ -229,12 +338,16 @@ local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_REGEN_DISABLED")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
+ev:RegisterEvent("PLAYER_LOGOUT")
 ev:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" and arg1 == addonName then
     AzerothSurvivorsDB = AzerothSurvivorsDB or {}
     ns.db = AzerothSurvivorsDB
     for k, v in pairs(DEFAULTS) do if ns.db[k] == nil then ns.db[k] = v end end
     build()
+    ns.Flight.Init()
+  elseif event == "PLAYER_LOGOUT" then
+    saveRun() -- a run in progress comes back with F9 / Continue
   elseif event == "PLAYER_REGEN_DISABLED" and frame then
     -- still allowed in this handler; afterwards keyboard propagation is locked
       if frame:IsShown() then
@@ -255,6 +368,7 @@ SlashCmdList.AZEROTHSURVIVORS = function(msg)
   local P = function(s) print("|cffffd100Azeroth Survivors|r: " .. s) end
   if cmd == "" then
     stressCap = nil
+    if not ns.IsOpen() and ns.Flight.InFlight() then ns.Flight.Open() return end
     toggle()
   elseif cmd == "debug" then
     ns.db.debug = not ns.db.debug
@@ -275,12 +389,20 @@ SlashCmdList.AZEROTHSURVIVORS = function(msg)
     ns.db.debug = true
     frame:Show()
     startRun()
+  elseif cmd == "flight" then
+    ns.db.flightOffer = not ns.db.flightOffer
+    P("offer to play on flights " .. (ns.db.flightOffer and "on" or "off"))
+  elseif cmd == "save" then
+    ns.QuickSave()
+  elseif cmd == "load" then
+    if not ns.IsOpen() and not ns.Open() then return end
+    ns.QuickLoad()
   elseif cmd == "reset" then
     frame:ClearAllPoints()
     frame:SetPoint("CENTER")
     P("window position reset")
   else
-    P("/azs  open/close   /azs stress N  stress test with N enemies   /azs debug  fps overlay   /azs anim  animations on/off   /azs numbers  damage numbers   /azs scale 0.8   /azs reset")
+    P("/azs  open/close   /azs stress N  stress test with N enemies   /azs debug  fps overlay   /azs anim  animations on/off   /azs numbers  damage numbers   /azs flight  offer to play on flights   /azs save | load  quick save / load   /azs scale 0.8   /azs reset")
   end
 end
 

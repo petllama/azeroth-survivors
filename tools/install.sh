@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 DEST="${WOW_ADDONS:-/mnt/games/BattleNet/World of Warcraft/_forever_/Interface/AddOns}"
 [ -d "$DEST" ] || { echo "no AddOns folder at $DEST" >&2; exit 1; }
 for f in AzerothSurvivors/*.lua; do luac5.1 -p "$f"; done
-lua5.1 tests/run_addon.lua 60 >/dev/null || { echo "offline addon test failed" >&2; exit 1; }
+lua5.1 tests/run_addon.lua 60 >/dev/null && lua5.1 tests/test_save.lua >/dev/null || { echo "offline addon test failed" >&2; exit 1; }
 rm -rf "$DEST/AzerothSurvivors"
 mkdir -p "$DEST/AzerothSurvivors"
 cp AzerothSurvivors/*.lua AzerothSurvivors/*.toc "$DEST/AzerothSurvivors/"

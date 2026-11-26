@@ -772,3 +772,84 @@ function Sim.Step(S, dt, ix, iy)
     S.hooks.levelup(S)
   end
 end
+
+---------------------------------------------------------------------------
+-- save / load (plain tables only: they go into SavedVariables)
+---------------------------------------------------------------------------
+Sim.SAVE_VERSION = 1
+
+function Sim.Serialize(S)
+  local p = S.p
+  local d = {
+    v = Sim.SAVE_VERSION, class = S.class, t = S.t, kills = S.kills, dmgDone = S.dmgDone,
+    state = S.state == "levelup" and "levelup" or "play",
+    spawnAcc = S.spawnAcc, nextElite = S.nextElite, nextSwarm = S.nextSwarm,
+    bossSpawned = S.bossSpawned or nil, bossKilled = S.bossKilled or nil,
+    pendingLevels = S.pendingLevels, xpBank = S.xpBank, picks = S.picks or 0,
+    p = { x = p.x, y = p.y, hp = p.hp, xp = p.xp, level = p.level, fx = p.fx, fy = p.fy },
+    weapons = {}, passives = {}, enemies = {}, gems = {}, items = {},
+  }
+  for i, w in ipairs(S.wlist) do d.weapons[i] = { w.id, w.level, w.timer or 0, w.angle or 0 } end
+  for i, id in ipairs(S.plist) do d.passives[i] = { id, S.passives[id] } end
+  for i = 1, S.nE do
+    local e = S.enemies[i]
+    if not e.dead then
+      d.enemies[#d.enemies + 1] = { e.kind, e.x, e.y, e.hp, e.maxhp, e.speed, e.dmg, e.slow, e.root, e.dot, e.dotT, e.pdps, e.pT, e.face }
+    end
+  end
+  for i = 1, S.nG do local g = S.gems[i]; if not g.dead then d.gems[#d.gems + 1] = { g.x, g.y, g.xp } end end
+  for i = 1, S.nI do local it = S.items[i]; if not it.dead then d.items[#d.items + 1] = { it.kind, it.x, it.y } end end
+  if S.choices then
+    d.choices = {}
+    for i, c in ipairs(S.choices) do d.choices[i] = { c.kind, c.id, c.level } end
+  end
+  return d
+end
+
+-- Rebuild a run from Sim.Serialize data. opts as for Sim.New (hooks, viewR). Returns S or nil, why.
+function Sim.Deserialize(d, opts)
+  if type(d) ~= "table" or d.v ~= Sim.SAVE_VERSION or not C.CLASSES[d.class] then return nil, "unknown save" end
+  opts = opts or {}
+  opts.class = d.class
+  local S = Sim.New(opts)
+  -- weapons in their order, levelled up the same way as in play
+  S.weapons, S.wlist, S.poison, S.thorns = {}, {}, nil, nil
+  for _, wd in ipairs(d.weapons or {}) do
+    if C.WEAPONS[wd[1]] then
+      local w = Sim.AddWeapon(S, wd[1])
+      for _ = 2, wd[2] do Sim.LevelWeapon(S, wd[1]) end
+      w.timer, w.angle = wd[3], wd[4]
+    end
+  end
+  for _, pd in ipairs(d.passives or {}) do
+    if C.PASSIVES[pd[1]] then for _ = 1, pd[2] do Sim.AddPassive(S, pd[1]) end end
+  end
+  local p, dp = S.p, d.p
+  p.x, p.y, p.xp, p.level, p.fx, p.fy = dp.x, dp.y, dp.xp, dp.level, dp.fx, dp.fy
+  p.hp = math.min(dp.hp, p.maxhp)
+  p.xpNext = C.XpForLevel(p.level)
+  S.t, S.kills, S.dmgDone = d.t, d.kills, d.dmgDone
+  S.spawnAcc, S.nextElite, S.nextSwarm = d.spawnAcc, d.nextElite, d.nextSwarm
+  S.bossSpawned, S.bossKilled = d.bossSpawned, d.bossKilled
+  S.pendingLevels, S.xpBank, S.picks = d.pendingLevels, d.xpBank or 0, d.picks
+  for _, ed in ipairs(d.enemies or {}) do
+    if C.ENEMIES[ed[1]] then
+      local e = spawnEnemy(S, ed[1], ed[2], ed[3], true)
+      e.hp, e.maxhp, e.speed, e.dmg = ed[4], ed[5], ed[6], ed[7]
+      e.slow, e.root, e.dot, e.dotT, e.pdps, e.pT, e.face = ed[8], ed[9], ed[10], ed[11], ed[12], ed[13], ed[14]
+    end
+  end
+  for _, gd in ipairs(d.gems or {}) do
+    local g = tremove(S.gemPool) or {}
+    g.x, g.y, g.xp, g.pull, g.dead, g.tex = gd[1], gd[2], gd[3], false, false, nil
+    S.nG = S.nG + 1
+    S.gems[S.nG] = g
+  end
+  for _, id in ipairs(d.items or {}) do dropItem(S, id[1], id[2], id[3]) end
+  if d.state == "levelup" and d.choices then
+    S.state = "levelup"
+    S.choices = {}
+    for i, c in ipairs(d.choices) do S.choices[i] = { kind = c[1], id = c[2], level = c[3] } end
+  end
+  return S
+end

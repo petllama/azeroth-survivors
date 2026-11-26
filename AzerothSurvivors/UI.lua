@@ -153,6 +153,10 @@ function UI.Init(frame)
     b:SetScript("OnClick", function() ns.StartClass(id) end)
     t.cards[id] = b
   end
+  t.cont = CreateFrame("Button", nil, t, "UIPanelButtonTemplate")
+  t.cont:SetSize(360, 26)
+  t.cont:SetPoint("TOP", sub, "BOTTOM", 0, -330)
+  t.cont:SetScript("OnClick", function() ns.QuickLoad() end)
   local go = font(t, 16)
   go:SetPoint("TOP", sub, "BOTTOM", 0, -300)
   go:SetText("Press |cffffd1001|r |cffffd1002|r |cffffd1003|r or click a class.  |cff00ff00SPACE|r plays the highlighted one.")
@@ -223,6 +227,13 @@ end
 function UI.Showing(name) return panels[name] and panels[name]:IsShown() end
 
 function UI.TitleBest(db, selected)
+  local name, t, level = ns.SaveInfo()
+  if name then
+    panels.title.cont:SetText(string.format("Continue saved %s run (%s, level %d)   F9", name, fmtTime(t), level))
+    panels.title.cont:Show()
+  else
+    panels.title.cont:Hide()
+  end
   for id, card in pairs(panels.title.cards) do
     local b = db.bestByClass and db.bestByClass[id]
     card.best:SetText(b and string.format("Best: %s, level %d%s", fmtTime(b.t), b.level, b.won and " |cff00ff00victory|r" or "") or "")
@@ -247,7 +258,8 @@ function UI.LevelUp(S)
 end
 
 function UI.Pause(reason)
-  panels.pause.sub:SetText(reason or "|cffffd100ESC|r resume     |cffffd100Q|r end run")
+  panels.pause.sub:SetText((reason and (reason .. "\n\n") or "") ..
+    "|cffffd100P|r / |cffffd100ESC|r resume     |cffffd100F6|r quick save     |cffffd100F9|r quick load     |cffffd100Q|r end run")
   UI.Show("pause")
 end
 
