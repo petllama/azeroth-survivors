@@ -232,9 +232,10 @@ function UI.Update(S, elapsed, dbg)
   local p = S.p
   xpBar:SetMinMaxValues(0, p.xpNext)
   xpBar:SetValue(p.xp)
-  levelText:SetText("Level " .. p.level)
-  timerText:SetText(fmtTime(S.t))
-  killText:SetText(S.kills .. " kills")
+  if p.level ~= hud.lv then hud.lv = p.level; levelText:SetText("Level " .. p.level) end
+  local sec = floor(S.t)
+  if sec ~= hud.sec then hud.sec = sec; timerText:SetText(fmtTime(sec)) end
+  if S.kills ~= hud.k then hud.k = S.kills; killText:SetText(S.kills .. " kills") end
   if S.boss then
     bossBar:SetMinMaxValues(0, S.boss.maxhp)
     bossBar:SetValue(S.boss.hp)
@@ -243,6 +244,20 @@ function UI.Update(S, elapsed, dbg)
   else
     bossBar:Hide()
   end
+  local sig = S.picks or 0
+  if sig ~= hud.sig or S ~= hud.S then
+    hud.sig, hud.S = sig, S
+    UI.Slots(S)
+  end
+  if banner.t > 0 then
+    banner.t = banner.t - elapsed
+    banner:SetAlpha(math.min(1, banner.t))
+    if banner.t <= 0 then banner:Hide() end
+  end
+  if dbg then debugText:SetText(dbg); debugText:Show() else debugText:Hide() end
+end
+
+function UI.Slots(S)
   local i = 0
   for _, w in ipairs(S.wlist) do
     i = i + 1
@@ -255,12 +270,6 @@ function UI.Update(S, elapsed, dbg)
     slots[i].icon:SetTexture(C.PASSIVES[id].icon); slots[i].lv:SetText(S.passives[id]); slots[i]:Show()
   end
   for k = i + 1, #slots do slots[k]:Hide() end
-  if banner.t > 0 then
-    banner.t = banner.t - elapsed
-    banner:SetAlpha(math.min(1, banner.t))
-    if banner.t <= 0 then banner:Hide() end
-  end
-  if dbg then debugText:SetText(dbg); debugText:Show() else debugText:Hide() end
 end
 
-function UI.HideBoss() bossBar:Hide(); banner:Hide(); banner.t = 0 end
+function UI.HideBoss() bossBar:Hide(); banner:Hide(); banner.t = 0; hud.lv, hud.sec, hud.k, hud.sig = nil, nil, nil, nil end

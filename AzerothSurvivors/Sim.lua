@@ -135,6 +135,7 @@ function Sim.Choose(S, i)
     if S.weapons[c.id] then Sim.LevelWeapon(S, c.id) else Sim.AddWeapon(S, c.id) end
   else Sim.AddPassive(S, c.id) end
   S.choices = nil
+  S.picks = (S.picks or 0) + 1
   S.pendingLevels = S.pendingLevels - 1
   if S.pendingLevels > 0 then
     Sim.RollChoices(S)

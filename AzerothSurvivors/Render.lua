@@ -17,7 +17,7 @@ local FALLBACK = {
   wraith = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_5", 0.6, 0.8, 1 },
   brute  = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_6", 0.6, 1, 0.6 },
   elite  = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_1", 1, 1, 1 },
-  boss   = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8", 0.6, 0.85, 1 },
+  boss   = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_3", 0.6, 0.85, 1 },
 }
 
 local W, H = 1000, 700
@@ -56,13 +56,14 @@ function R.Release(_, o)
   o.vis = nil
 end
 
+-- Returns true when the art file loaded; otherwise applies the fallback (if any).
 local function art(t, name, fallback)
-  if R.USE_ART then
-    t:SetTexture(ART .. name)
-  elseif fallback then
+  t.isArt = R.USE_ART and t:SetTexture(ART .. name) and true or false
+  if not t.isArt and fallback then
     t:SetTexture(fallback[1])
     t:SetVertexColor(fallback[2], fallback[3], fallback[4])
   end
+  return t.isArt
 end
 
 function R.Init(parent, w, h)
@@ -76,12 +77,13 @@ function R.Init(parent, w, h)
   bg:SetAllPoints()
   bg:SetColorTexture(0.05, 0.06, 0.05, 1)
 
-  if R.USE_ART then
-    groundTex = world:CreateTexture(nil, "BACKGROUND", nil, -7)
-    groundTex:SetAllPoints()
-    groundTex:SetTexture(ART .. "ground", "REPEAT", "REPEAT")
+  groundTex = world:CreateTexture(nil, "BACKGROUND", nil, -7)
+  groundTex:SetAllPoints()
+  if R.USE_ART and groundTex:SetTexture(ART .. "ground", "REPEAT", "REPEAT") then
     groundTex:SetVertexColor(0.8, 0.8, 0.8)
   else
+    groundTex:Hide()
+    groundTex = nil
     for i = 1, 40 do
       local l = world:CreateTexture(nil, "BACKGROUND", nil, -6)
       l:SetColorTexture(1, 1, 1, 0.04)
@@ -102,14 +104,14 @@ function R.Init(parent, w, h)
     end)
   end
   newPool("gem", "ARTWORK", -2, function(t)
-    if R.USE_ART then t:SetTexture(ART .. "gem") else t:SetTexture(WHITE); t:SetRotation(math.pi / 4) end
+    if not art(t, "gem") then t:SetTexture(WHITE); t:SetRotation(math.pi / 4) end
   end)
   newPool("potion", "ARTWORK", -1, function(t)
-    if R.USE_ART then t:SetTexture(ART .. "potion") else t:SetTexture("Interface\\Icons\\INV_Potion_54") end
+    if not art(t, "potion") then t:SetTexture("Interface\\Icons\\INV_Potion_54") end
     t:SetSize(22, 22)
   end)
   newPool("proj", "OVERLAY", 1, function(t)
-    if R.USE_ART then t:SetTexture(ART .. "bolt") else t:SetTexture(CIRCLE); t:SetVertexColor(0.95, 0.5, 1) end
+    if not art(t, "bolt") then t:SetTexture(CIRCLE); t:SetVertexColor(0.95, 0.5, 1) end
     t:SetBlendMode("ADD")
     t:SetSize(18, 18)
   end)
@@ -117,7 +119,7 @@ function R.Init(parent, w, h)
   playerTex = world:CreateTexture(nil, "ARTWORK", nil, 5)
   playerTex:SetSize(40, 40)
   playerTex:SetPoint("CENTER", world, "BOTTOMLEFT", W / 2, H / 2)
-  if R.USE_ART then playerTex:SetTexture(ART .. "hero") else SetPortraitTexture(playerTex, "player") end
+  if not art(playerTex, "hero") then SetPortraitTexture(playerTex, "player") end
 
   playerHp = CreateFrame("StatusBar", nil, world)
   playerHp:SetSize(40, 4)
@@ -212,12 +214,13 @@ function R.Hurt()
 end
 
 function R.Clear()
-  for _, p in pairs(pools) do end
   for i = 1, #lines do lines[i].on = false; lines[i]:Hide() end
   for i = 1, #rings do rings[i].on = false; rings[i]:Hide() end
   for i = 1, #numbers do numbers[i].on = false; numbers[i]:Hide() end
   for i = 1, #orbTex do orbTex[i]:Hide() end
   auraTex:Hide()
+  playerTex:SetTexCoord(0, 1, 0, 1)
+  playerTex:SetAlpha(1)
   flashTex.a = 0
   flashTex:SetAlpha(0)
 end
@@ -249,7 +252,7 @@ function R.Draw(S, elapsed)
   -- ground
   if groundTex then
     local T = 256
-    local u0, v0 = -ox / T, oy / T
+    local u0, v0 = (-ox / T) % 1, (oy / T) % 1
     groundTex:SetTexCoord(u0, u0 + W / T, v0, v0 + H / T)
   else
     local G = 64
@@ -290,7 +293,7 @@ function R.Draw(S, elapsed)
         e.tint = tint
         if tint == 1 then t:SetVertexColor(1, 0.35, 0.35)
         elseif tint == 2 then t:SetVertexColor(0.55, 0.75, 1)
-        elseif R.USE_ART then t:SetVertexColor(1, 1, 1)
+        elseif t.isArt then t:SetVertexColor(1, 1, 1)
         else local f = FALLBACK[e.kind]; t:SetVertexColor(f[2], f[3], f[4]) end
       end
       if e.face ~= e.tface then
@@ -350,7 +353,7 @@ function R.Draw(S, elapsed)
     local t = orbTex[k]
     if not t then
       t = world:CreateTexture(nil, "OVERLAY", nil, 0)
-      if R.USE_ART then t:SetTexture(ART .. "orb") else t:SetTexture(CIRCLE); t:SetVertexColor(1, 0.85, 0.4) end
+      if not art(t, "orb") then t:SetTexture(CIRCLE); t:SetVertexColor(1, 0.85, 0.4) end
       t:SetBlendMode("ADD")
       orbTex[k] = t
     end

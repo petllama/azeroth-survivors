@@ -5,11 +5,18 @@ local C, Sim, R, UI = ns.Content, ns.Sim, ns.Render, ns.UI
 local DEFAULTS = { numbers = true, debug = false, scale = 1, runs = 0 }
 local frame, S
 local mode = "title" -- title | play | levelup | pause | over
-local keys = {}
 local stressCap
 local fpsAcc, fpsN, fps, simMs, drawMs = 0, 0, 0, 0, 0
+local debugLine = ""
+
+local function clampScale(s)
+  local maxS = math.min(UIParent:GetWidth() / (frame:GetWidth() + 6), UIParent:GetHeight() / (frame:GetHeight() + 30))
+  return math.max(0.5, math.min(maxS, s))
+end
 
 local MOVE = { W = "up", UP = "up", S = "down", DOWN = "down", A = "left", LEFT = "left", D = "right", RIGHT = "right" }
+
+function ns.State() return S, mode end
 
 function ns.PlaySound(id)
   pcall(PlaySound, id, "SFX")
@@ -38,13 +45,12 @@ local hooks = {
     local newBest = not s.stress and (not b or (won and not b.won) or (won == (b.won or false) and s.t > b.t))
     if newBest then db.best = { t = s.t, level = s.p.level, kills = s.kills, won = won } end
     UI.Over(s, won, newBest)
-    ns.PlaySound(won and 8960 or 8959)
+    ns.PlaySound(won and 888 or 8959)
   end,
 }
 
 local function startRun()
   if S then R.ReleaseAll(S) end
-  wipe(keys)
   S = Sim.New({ viewR = viewR(), hooks = hooks, stress = stressCap and true or nil, cap = stressCap })
   UI.HideBoss()
   UI.Show(nil)
@@ -53,7 +59,7 @@ local function startRun()
 end
 
 local function pause(reason)
-  if mode == "play" then mode = "pause"; wipe(keys); UI.Pause(reason) end
+  if mode == "play" then mode = "pause"; UI.Pause(reason) end
 end
 
 local function resume()
@@ -65,6 +71,7 @@ function ns.Choose(i)
   if Sim.Choose(S, i) and S.state == "play" then
     mode = "play"
     UI.Show(nil)
+    if InCombatLockdown() then pause("|cffff4040You are in combat!|r  The game resumes control after combat.") end
   end
 end
 
@@ -74,16 +81,14 @@ end
 
 -- returns true when the key is ours (not passed on to the game's bindings)
 local function onKey(key, down)
-  local dir = MOVE[key]
-  if dir then
-    keys[dir] = down or nil
-    return true
+  if MOVE[key] then
+    return mode == "play" -- movement is polled with IsKeyDown; outside play the character may walk
   end
   if not down then return key == "ESCAPE" or key == "SPACE" end
   if key == "ESCAPE" then
     if mode == "play" then pause()
     elseif mode == "pause" then resume()
-    elseif mode == "title" or mode == "over" then close() end
+    else close() end -- title, over, levelup (the level-up waits for reopening)
     return true
   elseif key == "SPACE" then
     if mode == "title" or mode == "over" then startRun() end
@@ -99,14 +104,19 @@ local function onKey(key, down)
   return false
 end
 
+local function held(a, b) return IsKeyDown(a) or IsKeyDown(b) end
+
 local function onUpdate(_, elapsed)
   if not S then return end
   fpsAcc, fpsN = fpsAcc + elapsed, fpsN + 1
   if fpsAcc >= 0.5 then fps, fpsAcc, fpsN = fpsN / fpsAcc, 0, 0 end
   local t0 = debugprofilestop()
   if mode == "play" then
-    local ix = (keys.right and 1 or 0) - (keys.left and 1 or 0)
-    local iy = (keys.up and 1 or 0) - (keys.down and 1 or 0)
+    local ix, iy = 0, 0
+    if not GetCurrentKeyBoardFocus() then -- typing in chat must not steer
+      ix = (held("D", "RIGHT") and 1 or 0) - (held("A", "LEFT") and 1 or 0)
+      iy = (held("W", "UP") and 1 or 0) - (held("S", "DOWN") and 1 or 0)
+    end
     Sim.Step(S, elapsed, ix, iy)
   end
   local t1 = debugprofilestop()
@@ -116,12 +126,11 @@ local function onUpdate(_, elapsed)
   local t2 = debugprofilestop()
   simMs = simMs * 0.9 + (t1 - t0) * 0.1
   drawMs = drawMs * 0.9 + (t2 - t1) * 0.1
-  local dbg
-  if ns.db.debug then
-    dbg = string.format("%.0f fps   sim %.2f ms   draw %.2f ms   enemies %d   missiles %d   crystals %d   mem %.0f KB",
+  if ns.db.debug and fpsN == 0 then
+    debugLine = string.format("%.0f fps   sim %.2f ms   draw %.2f ms   enemies %d   missiles %d   crystals %d   mem %.0f KB",
       fps, simMs, drawMs, S.nE, S.nP, S.nG, collectgarbage("count"))
   end
-  UI.Update(S, elapsed, dbg)
+  UI.Update(S, elapsed, ns.db.debug and debugLine or nil)
 end
 
 local function build()
@@ -134,8 +143,12 @@ local function build()
   frame:SetToplevel(true)
   frame:SetClampedToScreen(true)
   frame:SetMovable(true)
-  frame:SetScale(ns.db.scale or 1)
+  frame:SetScale(clampScale(ns.db.scale or 1))
   frame:Hide()
+  -- swallow clicks and the wheel so they never reach the 3D world (a right-click could pull a mob)
+  frame:EnableMouse(true)
+  frame:EnableMouseWheel(true)
+  frame:SetScript("OnMouseWheel", function() end)
 
   local border = frame:CreateTexture(nil, "BACKGROUND", nil, -8)
   border:SetPoint("TOPLEFT", -3, 3)
@@ -171,18 +184,14 @@ local function build()
     if InCombatLockdown() then return end
     self:SetPropagateKeyboardInput(not onKey(key, true))
   end)
-  frame:SetScript("OnKeyUp", function(self, key)
-    if InCombatLockdown() then return end
-    self:SetPropagateKeyboardInput(not onKey(key, false))
-  end)
+  frame:SetScript("OnKeyUp", function() end)
   frame:SetScript("OnUpdate", onUpdate)
   frame:SetScript("OnShow", function(self)
     if not InCombatLockdown() then self:EnableKeyboard(true) end
     if mode == "title" then UI.TitleBest(ns.db); UI.Show("title") end
   end)
   frame:SetScript("OnHide", function()
-    wipe(keys)
-    pause()
+      pause()
   end)
 end
 
@@ -205,8 +214,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     build()
   elseif event == "PLAYER_REGEN_DISABLED" and frame then
     -- still allowed in this handler; afterwards keyboard propagation is locked
-    wipe(keys)
-    if frame:IsShown() then
+      if frame:IsShown() then
       pause("|cffff4040You are in combat!|r  The game resumes control after combat.")
       frame:SetPropagateKeyboardInput(true)
       frame:EnableKeyboard(false)
@@ -232,7 +240,7 @@ SlashCmdList.AZEROTHSURVIVORS = function(msg)
     ns.db.numbers = not ns.db.numbers
     P("damage numbers " .. (ns.db.numbers and "on" or "off"))
   elseif cmd == "scale" and tonumber(arg) then
-    ns.db.scale = math.max(0.5, math.min(1.5, tonumber(arg)))
+    ns.db.scale = clampScale(tonumber(arg))
     frame:SetScale(ns.db.scale)
     P("scale " .. ns.db.scale)
   elseif cmd == "stress" then

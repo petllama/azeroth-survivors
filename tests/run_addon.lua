@@ -41,7 +41,7 @@ function Widget:GetHighlightTexture() return widget("Texture", self) end
 function Widget:SetText(t) assert(t ~= nil, "SetText(nil)"); self._text = t end
 function Widget:GetText() return self._text end
 function Widget:SetFont(path, size) assert(path and size, "SetFont args") end
-function Widget:SetTexture(path) self._tex = path end
+function Widget:SetTexture(path) self._tex = path; return not _G.__noArt end
 function Widget:SetPropagateKeyboardInput(v) assert(not _G.__inCombat, "SetPropagateKeyboardInput in combat"); self._prop = v end
 
 _G.UIParent = widget("Frame"); UIParent._w, UIParent._h = 1920, 1080
@@ -51,6 +51,9 @@ function CreateFrame(kind, name, parent)
   return f
 end
 STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
+local down = {}
+function IsKeyDown(k) return down[k] or false end
+function GetCurrentKeyBoardFocus() return nil end
 function InCombatLockdown() return _G.__inCombat or false end
 local profT = 0
 function debugprofilestop() return os.clock() * 1000 end
@@ -112,19 +115,29 @@ local frame = _G.AzerothSurvivorsFrame
 assert(frame, "no main frame")
 frame._w, frame._h = 1200, 760
 
-local function key(k, down)
-  local h = frame._scripts[down and "OnKeyDown" or "OnKeyUp"]
+local function key(k, isDown)
+  down[k] = isDown or nil
+  local h = frame._scripts[isDown and "OnKeyDown" or "OnKeyUp"]
   try(h, frame, k)
 end
 local function tick(dt) try(frame._scripts.OnUpdate, frame, dt) end
 
 try(SlashCmdList.AZEROTHSURVIVORS, "")
 assert(frame._shown, "window did not open")
-key("SPACE", true); key("SPACE", false)
+key("SPACE", true)
 assert(frame._prop == false, "SPACE should be consumed")
 key("J", true)
 assert(frame._prop == true, "J should propagate")
 ns.db.debug = true
+do -- movement keys steer the hero and are consumed only during play
+  local S = ns.State()
+  local x0 = S.p.x
+  key("D", true); assert(frame._prop == false, "D should be consumed in play")
+  for _ = 1, 30 do tick(1 / 60) end
+  key("D", false)
+  assert(S.p.x > x0 + 50, "hero did not move right: " .. S.p.x - x0)
+end
+_G.__noArt = os.getenv("NOART") and true or nil
 
 local dt, t, levelups = 1 / 60, 0, 0
 local dirs = { "W", "D", "S", "A" }
@@ -144,8 +157,13 @@ while t < SECONDS and errors == 0 do
   if math.floor(t * 60) % 30 == 0 then key(tostring(math.random(3)), true) end
 end
 -- pause / resume / combat / quit paths
-key("ESCAPE", true); tick(dt)
-key("ESCAPE", true); tick(dt)
+local S, m = ns.State()
+if m == "play" or m == "levelup" then
+  if m == "levelup" then key("1", true) end
+  key("ESCAPE", true); tick(dt); assert(select(2, ns.State()) == "pause", "ESC should pause")
+  key("W", true); assert(frame._prop == true, "W should walk the character while paused")
+  key("ESCAPE", true); tick(dt); assert(select(2, ns.State()) == "play", "ESC should resume")
+end
 fireAll("PLAYER_REGEN_DISABLED"); _G.__inCombat = true
 tick(dt); key("W", true) -- ignored while in combat
 _G.__inCombat = false; fireAll("PLAYER_REGEN_ENABLED")
