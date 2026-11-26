@@ -15,20 +15,30 @@ Built for WoW: Forever (interface 16001, a retail-based client). It uses only pl
 - Movement keys are captured only while a run is playing; on the title, pause and game-over screens your character can walk.
 - Entering real combat pauses the game and releases the keyboard (WoW forbids changing keyboard capture in combat).
 
+On the game-over screen `SPACE` replays the same class and `C` returns to class select.
+
 Other commands: `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (stress test with 600 enemies, invulnerable), `/azs numbers` (damage numbers on/off), `/azs scale 0.8`, `/azs reset` (window position).
 
-## Content (0.1.0)
+## Classes (0.2.0)
 
-- Weapons (5 slots, level 6 max): Arcane Missiles, Holy Spheres, Consecration, Frost Nova, Chain Lightning.
-- Passives (5 slots, level 5 max): Might, Haste, Sprint, Fortitude, Renew, Greed, Devotion, Arcane Reach.
-- Enemies: ghouls, bats, wraiths, brutes, an elite death knight every minute (drops a potion), bat swarms every 90 s, the Frost Lich at 8:00. Win at 10:00.
+Pick a class on the title screen (`1` `2` `3` or click). Each has its own five skills; passives are shared.
+
+| Class | Style | Skills |
+|---|---|---|
+| Paladin | 120 hp, armored | **Crusader Strike** (start, frontal swing), Consecration (burning ground), Blessed Hammers (orbiting), Avenger's Shield (bounces between enemies), Divine Storm (spin that heals per enemy hit) |
+| Rogue | 85 hp, fast, 15% crit | **Sinister Strike** (start, quick stabs), Fan of Knives (ring of knives), Shuriken Toss (piercing star), Blade Flurry (tight orbiting blades), Deadly Poison (all hits poison) |
+| Druid | 110 hp, regenerates | **Wrath** (start, nature bolts), Moonfire (strikes + burn), Starfall (falling stars, area damage), Thorns (aura + damages attackers), Entangling Roots (roots everything nearby) |
+
+Passives (5 slots, level 5 max): Might, Haste, Sprint, Fortitude, Renew, Greed, Devotion, Arcane Reach, Precision (crit). Critical hits deal double damage (orange numbers); burns and poison tick in green.
+
+Enemies: ghouls, bats, wraiths, brutes, an elite death knight every minute (drops a potion), bat swarms every 90 s, the Frost Lich at 8:00. Win at 10:00. Best run is saved per class.
 
 ## Layout
 
 - `AzerothSurvivors/Content.lua` data and balance; `Sim.lua` pure-Lua simulation (no WoW API, spatial grid, pooled entities); `Render.lua` pooled textures/lines/numbers; `UI.lua` HUD and panels; `Main.lua` window, keyboard, loop, slash commands.
 - `AzerothSurvivors/Art/*.tga` sprites made with the local FLUX model (`tools/art/`, see its README).
-- `tests/run_sim.lua [seed] play|stress [cap]` headless run with a bot (`VACUUM=1` = perfect pickup), prints result and ms per step.
-- `tests/run_addon.lua [seconds]` loads the whole addon on a mock client and plays: open, start, move, level-ups, pause, combat pause, quit, restart, stress.
+- `CLASS=rogue tests/run_sim.lua [seed] play|stress [cap]` headless run with a bot (`VACUUM=1` = perfect pickup), prints result and ms per step.
+- `tests/run_addon.lua [seconds]` loads the whole addon on a mock client and plays: open, start, move, level-ups, pause, combat pause, quit, restart, class select and a run with every class, stress.
 - `tools/install.sh` syntax check + offline test, then copies into `_forever_/Interface/AddOns/AzerothSurvivors`. First install (and any new file) needs a full game restart, not `/reload`.
 
 ## Performance

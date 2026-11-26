@@ -12,7 +12,7 @@ local CELL = 64
 local MAX_R = 40 -- largest enemy radius (boss); grid queries widen by this
 
 local function noop() end
-local NOHOOKS = { release = noop, number = noop, fx = noop, levelup = noop, hurt = noop, kill = noop, over = noop, pickup = noop }
+local NOHOOKS = { release = noop, number = noop, fx = noop, levelup = noop, hurt = noop, kill = noop, over = noop, pickup = noop, heal = noop }
 
 function Sim.HpScale(t) return 1 + t / 200 + (t / 400) ^ 2 end
 
@@ -22,14 +22,17 @@ function Sim.HpScale(t) return 1 + t / 200 + (t / 400) ^ 2 end
 function Sim.New(opts)
   opts = opts or {}
   local P = C.PLAYER
+  local cls = C.CLASSES[opts.class or "paladin"] and (opts.class or "paladin") or "paladin"
+  local cd = C.CLASSES[cls]
   local S = {
+    class = cls, cdef = cd, impacts = {}, nImp = 0,
     t = 0, kills = 0, state = "play", dmgDone = 0,
     viewR = opts.viewR or 600,
     cap = opts.cap or C.MAX_ENEMIES,
     stress = opts.stress, invuln = opts.invuln or opts.stress,
     hooks = setmetatable(opts.hooks or {}, { __index = NOHOOKS }),
-    p = { x = 0, y = 0, r = P.r, hp = P.hp, maxhp = P.hp, speed = P.speed, magnet = P.magnet, regen = 0,
-          armor = 0, might = 1, haste = 1, area = 1, iframes = 0, level = 1, xp = 0,
+    p = { x = 0, y = 0, r = P.r, hp = cd.hp, maxhp = cd.hp, speed = cd.speed, magnet = P.magnet, regen = cd.regen,
+          armor = cd.armor, crit = cd.crit, might = 1, haste = 1, area = 1, iframes = 0, level = 1, xp = 0,
           xpNext = C.XpForLevel(1), fx = 1, fy = 0, moving = false },
     enemies = {}, nE = 0, projs = {}, nP = 0, gems = {}, nG = 0, items = {}, nI = 0,
     enemyPool = {}, projPool = {}, gemPool = {},
@@ -39,7 +42,7 @@ function Sim.New(opts)
     grid = {}, gridUsed = {}, nUsed = 0, nBuckets = 0, q = {}, q2 = {}, targets = {},
     nextId = 0, castId = 0,
   }
-  Sim.AddWeapon(S, opts.weapon or "bolt")
+  Sim.AddWeapon(S, opts.weapon or cd.start)
   return S
 end
 
@@ -52,6 +55,8 @@ function Sim.AddWeapon(S, id)
   for k, v in pairs(def.base) do w[k] = v end
   S.weapons[id] = w
   S.wlist[#S.wlist + 1] = w
+  if def.type == "poison" then S.poison = w end
+  if def.reflect or w.reflect then S.thorns = w end
   return w
 end
 
@@ -61,7 +66,7 @@ function Sim.LevelWeapon(S, id)
   for k, v in pairs(w.def.levels[w.level] or {}) do
     if k == "cdMul" then w.cd = w.cd * v
     elseif k == "tickMul" then w.tick = w.tick * v
-    elseif k ~= "text" then w[k] = w[k] + v end
+    elseif k ~= "text" then w[k] = (w[k] or 0) + v end
   end
 end
 
@@ -72,7 +77,8 @@ function Sim.AddPassive(S, id)
   if lv == 1 then S.plist[#S.plist + 1] = id end
   if d.stat == "might" then p.might = p.might + d.add
   elseif d.stat == "haste" then p.haste = p.haste * d.mul
-  elseif d.stat == "speed" then p.speed = p.speed + C.PLAYER.speed * d.mulAdd
+  elseif d.stat == "speed" then p.speed = p.speed + S.cdef.speed * d.mulAdd
+  elseif d.stat == "crit" then p.crit = p.crit + d.add
   elseif d.stat == "maxhp" then p.maxhp = p.maxhp + d.add; p.hp = p.hp + d.add
   elseif d.stat == "regen" then p.regen = p.regen + d.add
   elseif d.stat == "magnet" then p.magnet = p.magnet + C.PLAYER.magnet * d.mulAdd
@@ -84,7 +90,7 @@ end
 function Sim.RollChoices(S)
   local pool, wts = {}, {}
   local function add(c, wt) pool[#pool + 1] = c; wts[#wts + 1] = wt end
-  for _, id in ipairs(C.WEAPON_ORDER) do
+  for _, id in ipairs(S.cdef.kit) do
     local w = S.weapons[id]
     if w then
       if w.level < C.MAX_WEAPON_LEVEL then add({ kind = "weapon", id = id, level = w.level + 1 }, 2) end
@@ -231,6 +237,7 @@ local function spawnEnemy(S, kind, x, y, force)
   e.speed = d.speed * (0.9 + random() * 0.2)
   e.dmg = d.dmg * (1 + S.t / 600)
   e.slow, e.flash, e.kx, e.ky, e.orbT, e.lastProj, e.chainId = 0, 0, 0, 0, -1, 0, 0
+  e.root, e.dot, e.dotT, e.pdps, e.pT, e.dotAcc = 0, 0, 0, 0, 0, 0
   e.dead, e.face, e.tex = false, 1, nil
   S.nE = S.nE + 1
   S.enemies[S.nE] = e
@@ -280,9 +287,20 @@ local function dropItem(S, kind, x, y)
   S.items[S.nI] = it
 end
 
-local function damage(S, e, amt, kx, ky)
+-- dot/dotDur: apply (refresh) a burn; S.poison adds poison to every direct hit. isDot = tick, no crit/knock.
+local function damage(S, e, amt, kx, ky, dot, dotDur, isDot)
   if e.dead then return end
-  amt = amt * S.p.might
+  local p = S.p
+  amt = amt * p.might
+  local crit = false
+  if not isDot then
+    if random() < p.crit then amt = amt * 2; crit = true end
+    if dot and dot * dotDur > e.dot * e.dotT then e.dot, e.dotT = dot, dotDur end
+    local pw = S.poison
+    if pw then
+      if pw.dps > e.pdps or e.pT < pw.dur then e.pdps, e.pT = pw.dps, pw.dur end
+    end
+  end
   e.hp = e.hp - amt
   e.flash = 0.12
   S.dmgDone = S.dmgDone + amt
@@ -290,7 +308,7 @@ local function damage(S, e, amt, kx, ky)
     local k = e.def.elite and 0.3 or 1
     e.kx, e.ky = e.kx + kx * k, e.ky + ky * k
   end
-  S.hooks.number(S, e.x, e.y + e.r, amt)
+  S.hooks.number(S, e.x, e.y + e.r, amt, crit, isDot)
   if e.hp <= 0 then
     e.dead = true
     S.kills = S.kills + 1
@@ -317,7 +335,9 @@ local function hurtPlayer(S, e)
   local p = S.p
   if p.iframes > 0 then return end
   local dmg = max(1, e.dmg - p.armor)
+  S.lastHit = e
   p.hp = p.hp - dmg
+  if S.thorns then damage(S, e, S.thorns.reflect) end
   p.iframes = C.PLAYER.iframes
   S.hooks.hurt(S, dmg)
   if p.hp <= 0 then
@@ -330,7 +350,7 @@ local function spawnProj(S, x, y, vx, vy, w)
   local pr = tremove(S.projPool) or {}
   S.nextId = S.nextId + 1
   pr.id, pr.x, pr.y, pr.vx, pr.vy = S.nextId, x, y, vx, vy
-  pr.dmg, pr.pierce, pr.life, pr.dead, pr.tex = w.dmg, w.pierce, w.life, false, nil
+  pr.dmg, pr.pierce, pr.life, pr.dead, pr.tex, pr.w = w.dmg, w.pierce, w.life, false, nil, w
   S.nP = S.nP + 1
   S.projs[S.nP] = pr
 end
@@ -358,19 +378,16 @@ end
 ---------------------------------------------------------------------------
 local W = {}
 
-function W.bolt(S, w, dt)
-  w.timer = w.timer - dt
-  if w.timer > 0 then return end
-  w.timer = w.cd * S.p.haste
-  local p, E, T = S.p, S.enemies, S.targets
-  local range2 = (S.viewR * 0.9) ^ 2
-  local nT = 0
-  for k = 1, w.count do -- k nearest distinct targets (count is small)
-    local best, bd = nil, range2
+-- k nearest distinct live enemies within maxD of (x, y) into S.targets; returns the count
+local function nearest(S, x, y, k, maxD)
+  local E, T = S.enemies, S.targets
+  local nT, lim = 0, maxD * maxD
+  for _ = 1, k do
+    local best, bd = nil, lim
     for i = 1, S.nE do
       local e = E[i]
       if not e.dead then
-        local dx, dy = e.x - p.x, e.y - p.y
+        local dx, dy = e.x - x, e.y - y
         local d2 = dx * dx + dy * dy
         if d2 < bd then
           local taken = false
@@ -383,16 +400,65 @@ function W.bolt(S, w, dt)
     nT = nT + 1
     T[nT] = best
   end
+  for j = nT + 1, #T do T[j] = nil end
+  return nT
+end
+
+local function ready(S, w, dt)
+  w.timer = w.timer - dt
+  if w.timer > 0 then return false end
+  w.timer = (w.cd or w.tick) * S.p.haste
+  return true
+end
+
+-- aimed projectiles at the nearest enemies (Wrath, Shuriken Toss)
+function W.proj(S, w, dt)
+  if not ready(S, w, dt) then return end
+  local p, T = S.p, S.targets
+  local nT = nearest(S, p.x, p.y, w.count, S.viewR * 0.9)
   for k = 1, w.count do
-    local tx, ty
     local t = T[((k - 1) % max(nT, 1)) + 1]
-    if nT > 0 and t then tx, ty = t.x - p.x, t.y - p.y else tx, ty = p.fx, p.fy end
-    local a = math.atan2(ty, tx)
+    local a
+    if nT > 0 and t then a = math.atan2(t.y - p.y, t.x - p.x) else a = math.atan2(p.fy, p.fx) end
     if k > nT and nT > 0 then a = a + (random() - 0.5) * 0.5 end
     spawnProj(S, p.x, p.y, cos(a) * w.speed, sin(a) * w.speed, w)
   end
-  for j = 1, nT do T[j] = nil end
-  S.hooks.fx(S, "cast", "bolt")
+end
+
+-- a ring of projectiles (Fan of Knives)
+function W.burst(S, w, dt)
+  if not ready(S, w, dt) then return end
+  local p = S.p
+  local a0 = random() * TAU
+  for k = 1, w.count do
+    local a = a0 + k * TAU / w.count
+    spawnProj(S, p.x, p.y, cos(a) * w.speed, sin(a) * w.speed, w)
+  end
+end
+
+-- a swing in front of you, aimed at the nearest enemy in reach (Crusader / Sinister Strike)
+function W.melee(S, w, dt)
+  w.timer = w.timer - dt
+  if w.timer > 0 then return end
+  local p, q, T = S.p, S.q, S.targets
+  local R = w.range * p.area
+  if nearest(S, p.x, p.y, 1, R + 40) == 0 then w.timer = 0.1; return end
+  w.timer = w.cd * p.haste
+  local a = math.atan2(T[1].y - p.y, T[1].x - p.x)
+  local fx, fy = cos(a), sin(a)
+  local cosArc = 1 - 2 * min(w.arc, 1) -- arc 0.25 = 90 deg cone, 0.5 = half circle, 1 = full circle
+  for swing = 1, 1 + (w.double or 0) do
+    local n = query(S, p.x, p.y, R, q)
+    for i = 1, n do
+      local e = q[i]
+      local dx, dy = e.x - p.x, e.y - p.y
+      local d = sqrt(dx * dx + dy * dy) + 0.01
+      if (dx * fx + dy * fy) / d >= cosArc or d < e.r + p.r then
+        damage(S, e, w.dmg, dx / d * w.knock, dy / d * w.knock)
+      end
+    end
+  end
+  S.hooks.fx(S, "slash", p.x, p.y, a, R, w)
 end
 
 function W.orbit(S, w, dt)
@@ -426,19 +492,25 @@ function W.aura(S, w, dt)
   for i = 1, n do damage(S, q[i], w.dmg) end
 end
 
+-- burst around you: slow or root, optional heal per enemy hit (Divine Storm, Entangling Roots)
 function W.nova(S, w, dt)
-  w.timer = w.timer - dt
-  if w.timer > 0 then return end
-  w.timer = w.cd * S.p.haste
+  if not ready(S, w, dt) then return end
   local p, q = S.p, S.q
   local R = w.radius * p.area
   local n = query(S, p.x, p.y, R, q)
   for i = 1, n do
     local e = q[i]
-    e.slow = w.slow
+    if w.slow > 0 then
+      if w.root and not e.def.boss then e.root = w.slow else e.slow = w.slow end
+    end
     damage(S, e, w.dmg)
   end
-  S.hooks.fx(S, "nova", p.x, p.y, R)
+  if w.heal and n > 0 then
+    local h = min(n * w.heal, w.healCap)
+    p.hp = min(p.maxhp, p.hp + h)
+    S.hooks.heal(S, h)
+  end
+  S.hooks.fx(S, "nova", p.x, p.y, R, w)
 end
 
 function W.chain(S, w, dt)
@@ -473,7 +545,51 @@ function W.chain(S, w, dt)
     cur = best
   end
   w.npts = np
-  S.hooks.fx(S, "chain", pts, np)
+  S.hooks.fx(S, "chain", pts, np, w)
+end
+
+-- strikes on random on-screen enemies; with delay > 0 they land later as an area impact (Moonfire, Starfall)
+function W.strike(S, w, dt)
+  w.timer = w.timer - dt
+  if w.timer > 0 then return end
+  local p, q = S.p, S.q
+  local n = query(S, p.x, p.y, S.viewR * 0.8, q)
+  if n == 0 then w.timer = 0.2; return end
+  w.timer = w.cd * p.haste
+  for _ = 1, w.count do
+    local e = q[random(n)]
+    if w.delay > 0 then
+      local imp = { x = e.x, y = e.y, t = w.delay, w = w }
+      S.nImp = S.nImp + 1
+      S.impacts[S.nImp] = imp
+      S.hooks.fx(S, "fall", e.x, e.y, w.delay, w)
+    else
+      damage(S, e, w.dmg, nil, nil, w.dot, w.dotDur)
+      S.hooks.fx(S, "beam", e.x, e.y, 0, w)
+    end
+  end
+end
+
+function W.poison() end -- passive: S.poison is read by damage()
+
+local function stepImpacts(S, dt)
+  local j, q = 0, S.q2
+  for i = 1, S.nImp do
+    local imp = S.impacts[i]
+    imp.t = imp.t - dt
+    if imp.t <= 0 then
+      local w = imp.w
+      local R = w.radius * S.p.area
+      local n = query(S, imp.x, imp.y, R, q)
+      for k = 1, n do damage(S, q[k], w.dmg) end
+      S.hooks.fx(S, "impact", imp.x, imp.y, R, w)
+    else
+      j = j + 1
+      S.impacts[j] = imp
+    end
+  end
+  for i = j + 1, S.nImp do S.impacts[i] = nil end
+  S.nImp = j
 end
 
 ---------------------------------------------------------------------------
@@ -541,7 +657,7 @@ function Sim.Step(S, dt, ix, iy)
       if d > far and not e.def.boss and not e.def.elite then
         e.x, e.y = ringPos(S, S.viewR + 30) -- left behind: come back from ahead
       elseif d > 0.001 then
-        local sp = e.speed * (e.slow > 0 and 0.45 or 1) * dt
+        local sp = e.root > 0 and 0 or e.speed * (e.slow > 0 and 0.45 or 1) * dt
         e.x = e.x + dx / d * sp + e.kx * dt
         e.y = e.y + dy / d * sp + e.ky * dt
         e.face = dx < 0 and -1 or 1
@@ -553,6 +669,16 @@ function Sim.Step(S, dt, ix, iy)
         if e.kx * e.kx + e.ky * e.ky < 1 then e.kx, e.ky = 0, 0 end
       end
       if e.slow > 0 then e.slow = e.slow - dt end
+      if e.root > 0 then e.root = e.root - dt end
+      if e.dotT > 0 or e.pT > 0 then -- burns and poison tick twice a second
+        local dps = (e.dotT > 0 and e.dot or 0) + (e.pT > 0 and e.pdps or 0)
+        e.dotT, e.pT = e.dotT - dt, e.pT - dt
+        e.dotAcc = e.dotAcc + dt
+        if e.dotAcc >= 0.5 then
+          damage(S, e, dps * e.dotAcc, nil, nil, nil, nil, true)
+          e.dotAcc = 0
+        end
+      end
       if e.flash > 0 then e.flash = e.flash - dt end
     end
   end
@@ -564,7 +690,9 @@ function Sim.Step(S, dt, ix, iy)
   -- weapons
   for i = 1, #S.wlist do
     local w = S.wlist[i]
-    W[w.id](S, w, dt)
+    W[w.def.type](S, w, dt)
+  end
+  if S.nImp > 0 then stepImpacts(S, dt)
   end
 
   -- projectiles

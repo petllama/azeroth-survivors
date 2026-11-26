@@ -169,13 +169,38 @@ tick(dt); key("W", true) -- ignored while in combat
 _G.__inCombat = false; fireAll("PLAYER_REGEN_ENABLED")
 key("Q", true); tick(dt)
 key("SPACE", true); for _ = 1, 120 do tick(dt) end
+-- every class: game over -> C -> class key, then play a while with level-ups
+for i, cls in ipairs({ "paladin", "rogue", "druid" }) do
+  local S0, m0 = ns.State()
+  if m0 == "levelup" then key("1", true) end
+  if m0 ~= "over" then key("ESCAPE", true); tick(dt); key("Q", true); tick(dt) end
+  assert(select(2, ns.State()) == "over", "expected game over before class switch, got " .. tostring(select(2, ns.State())))
+  key("C", true)
+  assert(select(2, ns.State()) == "title", "C should open class select")
+  key(tostring(i), true)
+  local S1 = ns.State()
+  assert(S1.class == cls, "class " .. cls .. " not started: " .. tostring(S1.class))
+  local held2
+  for f = 1, 60 * 90 do
+    local want = dirs[math.floor(f / 150) % 4 + 1]
+    if want ~= held2 then if held2 then key(held2, false) end; key(want, true); held2 = want end
+    tick(dt)
+    if select(2, ns.State()) == "levelup" then key(tostring(math.random(3)), true) end
+    if select(2, ns.State()) == "over" then break end
+  end
+  if held2 then key(held2, false) end
+  local S2 = ns.State()
+  local ws = {}
+  for _, w in ipairs(S2.wlist) do ws[#ws + 1] = w.id .. w.level end
+  print(string.format("%s: t=%.0f level=%d kills=%d state=%s  %s", cls, S2.t, S2.p.level, S2.kills, S2.state, table.concat(ws, " ")))
+end
 try(SlashCmdList.AZEROTHSURVIVORS, "stress 600")
 for _ = 1, 600 do tick(dt) end
 try(SlashCmdList.AZEROTHSURVIVORS, "")
 key("ESCAPE", true)
 
-local b = ns.db.best or {}
-print(string.format("runs=%d best: t=%.0f level=%s kills=%s", ns.db.runs, b.t or 0, tostring(b.level), tostring(b.kills)))
+for c, b in pairs(ns.db.bestByClass or {}) do print(string.format("best %s: t=%.0f level=%d kills=%d", c, b.t, b.level, b.kills)) end
+print("runs=" .. ns.db.runs)
 print(string.format("errors=%d  SetPoint calls=%d  unknown-API calls: %s", errors, calls.SetPoint or 0,
   (function() local t = {} for k, v in pairs(calls) do if k ~= "SetPoint" then t[#t + 1] = k end end table.sort(t) return table.concat(t, " ") end)()))
 os.exit(errors == 0 and 0 or 1)

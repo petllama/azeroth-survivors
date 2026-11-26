@@ -9,10 +9,12 @@ local Sim, C = ns.Sim, ns.Content
 local seed = tonumber(arg[1]) or 1
 local mode = arg[2] or "play"
 local cap = tonumber(arg[3]) or 500
+local class = os.getenv("CLASS") or "paladin"
 if os.getenv("VACUUM") then C.PLAYER.magnet = 3000 end
 math.randomseed(seed)
 
-local S = Sim.New({ viewR = 560, stress = mode == "stress", cap = mode == "stress" and cap or nil })
+local KEEP = (class == "druid") and 130 or 75 -- melee classes fight up close
+local S = Sim.New({ class = class, viewR = 560, stress = mode == "stress", cap = mode == "stress" and cap or nil })
 local dt = 1 / 60
 local clock = os.clock
 local worst, total, steps = 0, 0, 0
@@ -25,7 +27,7 @@ local function bot()
     local e = S.enemies[i]
     local dx, dy = p.x - e.x, p.y - e.y
     local d2 = dx * dx + dy * dy + 1
-    if d2 < 130 * 130 then ax, ay = ax + dx / d2, ay + dy / d2 end
+    if d2 < KEEP * KEEP then ax, ay = ax + dx / d2, ay + dy / d2 end
   end
   -- walk toward the nearest gem (players vacuum XP)
   local gx, gy, gd = 0, 0, math.huge
@@ -59,7 +61,9 @@ local weapons = {}
 for _, w in ipairs(S.wlist) do weapons[#weapons + 1] = w.id .. w.level end
 local passives = {}
 for _, id in ipairs(S.plist) do passives[#passives + 1] = id .. S.passives[id] end
-print(string.format("%s seed=%d result=%s t=%.0fs level=%d kills=%d hp=%.0f/%.0f maxEnemies=%d gems=%d",
+print(string.format(class .. " %s seed=%d result=%s t=%.0fs level=%d kills=%d hp=%.0f/%.0f maxEnemies=%d gems=%d",
   mode, seed, S.state, S.t, S.p.level, S.kills, S.p.hp, S.p.maxhp, maxE, S.nG))
+local killer = S.lastHit and S.lastHit.kind or "-"
+print("  last hit by: " .. killer .. "   boss " .. (S.bossKilled and "killed" or (S.bossSpawned and "alive" or "not spawned")))
 print("  weapons: " .. table.concat(weapons, " ") .. "   passives: " .. table.concat(passives, " "))
 print(string.format("  step ms: avg %.3f worst %.3f  (%s, lua mem %.0f KB)", total / steps, worst, _VERSION, collectgarbage("count")))

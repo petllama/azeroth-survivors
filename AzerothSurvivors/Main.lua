@@ -2,7 +2,7 @@
 local addonName, ns = ...
 local C, Sim, R, UI = ns.Content, ns.Sim, ns.Render, ns.UI
 
-local DEFAULTS = { numbers = true, debug = false, scale = 1, runs = 0 }
+local DEFAULTS = { numbers = true, debug = false, scale = 1, runs = 0, class = "paladin" }
 local frame, S
 local mode = "title" -- title | play | levelup | pause | over
 local stressCap
@@ -32,6 +32,7 @@ local hooks = {
   number = R.Number,
   fx = R.Fx,
   hurt = function() R.Hurt() end,
+  heal = R.Heal,
   levelup = function(s)
     mode = "levelup"
     UI.LevelUp(s)
@@ -41,9 +42,10 @@ local hooks = {
     mode = "over"
     local db = ns.db
     db.runs = (db.runs or 0) + 1
-    local b = db.best
+    db.bestByClass = db.bestByClass or {}
+    local b = db.bestByClass[s.class]
     local newBest = not s.stress and (not b or (won and not b.won) or (won == (b.won or false) and s.t > b.t))
-    if newBest then db.best = { t = s.t, level = s.p.level, kills = s.kills, won = won } end
+    if newBest then db.bestByClass[s.class] = { t = s.t, level = s.p.level, kills = s.kills, won = won } end
     UI.Over(s, won, newBest)
     ns.PlaySound(won and 888 or 8959)
   end,
@@ -51,7 +53,9 @@ local hooks = {
 
 local function startRun()
   if S then R.ReleaseAll(S) end
-  S = Sim.New({ viewR = viewR(), hooks = hooks, stress = stressCap and true or nil, cap = stressCap })
+  local cls = C.CLASSES[ns.db.class] and ns.db.class or "paladin"
+  S = Sim.New({ class = cls, viewR = viewR(), hooks = hooks, stress = stressCap and true or nil, cap = stressCap })
+  R.SetClass(C.CLASSES[cls])
   UI.HideBoss()
   UI.Show(nil)
   mode = "play"
@@ -64,6 +68,18 @@ end
 
 local function resume()
   if mode == "pause" then mode = "play"; UI.Show(nil) end
+end
+
+function ns.StartClass(id)
+  if mode ~= "title" and mode ~= "over" then return end
+  ns.db.class = id
+  startRun()
+end
+
+local function showTitle()
+  mode = "title"
+  UI.TitleBest(ns.db, ns.db.class)
+  UI.Show("title")
 end
 
 function ns.Choose(i)
@@ -92,6 +108,12 @@ local function onKey(key, down)
     return true
   elseif key == "SPACE" then
     if mode == "title" or mode == "over" then startRun() end
+    return true
+  elseif mode == "title" and C.CLASS_ORDER[tonumber(key) or 0] then
+    ns.StartClass(C.CLASS_ORDER[tonumber(key)])
+    return true
+  elseif mode == "over" and key == "C" then
+    showTitle()
     return true
   elseif mode == "levelup" and (key == "1" or key == "2" or key == "3") then
     ns.Choose(tonumber(key))
@@ -188,7 +210,7 @@ local function build()
   frame:SetScript("OnUpdate", onUpdate)
   frame:SetScript("OnShow", function(self)
     if not InCombatLockdown() then self:EnableKeyboard(true) end
-    if mode == "title" then UI.TitleBest(ns.db); UI.Show("title") end
+    if mode == "title" then showTitle() end
   end)
   frame:SetScript("OnHide", function()
       pause()

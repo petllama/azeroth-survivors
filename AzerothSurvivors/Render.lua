@@ -23,8 +23,9 @@ local FALLBACK = {
 local W, H = 1000, 700
 local frame, world, fxLayer
 local pools = {}
-local playerTex, playerHp, auraTex, groundTex, flashTex
-local orbTex = {}
+local playerTex, playerHp, groundTex, flashTex
+local orbTex, auraTex = {}, {} -- per weapon id
+local sprites = {} -- fading fx sprites (slashes, falling stars, shields)
 local lines, rings, numbers = {}, {}, {}
 local gridLines = {}
 local numBudget = 0
@@ -91,11 +92,6 @@ function R.Init(parent, w, h)
     end
   end
 
-  auraTex = world:CreateTexture(nil, "BORDER")
-  auraTex:SetTexture(CIRCLE)
-  auraTex:SetVertexColor(1, 0.8, 0.3, 0.22)
-  auraTex:SetBlendMode("ADD")
-  auraTex:Hide()
 
   for kind, d in pairs(C.ENEMIES) do
     newPool(kind, "ARTWORK", d.boss and 3 or (d.elite and 2 or 1), function(t)
@@ -110,16 +106,10 @@ function R.Init(parent, w, h)
     if not art(t, "potion") then t:SetTexture("Interface\\Icons\\INV_Potion_54") end
     t:SetSize(22, 22)
   end)
-  newPool("proj", "OVERLAY", 1, function(t)
-    if not art(t, "bolt") then t:SetTexture(CIRCLE); t:SetVertexColor(0.95, 0.5, 1) end
-    t:SetBlendMode("ADD")
-    t:SetSize(18, 18)
-  end)
 
   playerTex = world:CreateTexture(nil, "ARTWORK", nil, 5)
   playerTex:SetSize(52, 52)
   playerTex:SetPoint("CENTER", world, "BOTTOMLEFT", W / 2, H / 2)
-  if not art(playerTex, "hero") then SetPortraitTexture(playerTex, "player") end
 
   playerHp = CreateFrame("StatusBar", nil, world)
   playerHp:SetSize(40, 4)
@@ -139,6 +129,58 @@ function R.Init(parent, w, h)
   flashTex:SetColorTexture(0.8, 0, 0, 1)
   flashTex:SetAlpha(0)
   flashTex.a = 0
+end
+
+-- glowing sprites are drawn additive; solid ones (knife, shuriken, hammer, shield) normal
+local GLOW = { wrath = true, star = true, slash = true, bolt = true, orb = true }
+
+local function projPool(w)
+  local d = w.def
+  local name = "proj_" .. (d.sprite or "bolt")
+  return pools[name] or newPool(name, "OVERLAY", 1, function(t)
+    if not art(t, d.sprite or "bolt") then
+      t:SetTexture(CIRCLE)
+      t:SetVertexColor(d.color[1], d.color[2], d.color[3])
+      t:SetBlendMode("ADD")
+    elseif GLOW[d.sprite] then
+      t:SetBlendMode("ADD")
+    end
+    t:SetSize(d.base.size or 18, d.base.size or 18)
+  end)
+end
+
+function R.SetClass(cdef)
+  playerTex:SetTexCoord(0, 1, 0, 1)
+  if not art(playerTex, cdef.hero) then playerTex:SetTexture(cdef.icon) end
+end
+
+local function getSprite(name, color)
+  local t
+  for i = 1, #sprites do if not sprites[i].on then t = sprites[i]; break end end
+  if not t then
+    if #sprites >= 60 then return nil end
+    t = world:CreateTexture(nil, "OVERLAY", nil, 3)
+    sprites[#sprites + 1] = t
+  end
+  if t.name ~= name then
+    t.name = name
+    t.ok = art(t, name)
+    if not t.ok then t:SetTexture(CIRCLE) end
+  end
+  t:SetBlendMode((not t.ok or GLOW[name]) and "ADD" or "BLEND")
+  t:SetVertexColor(color[1], color[2], color[3])
+  t.on = true
+  t:Show()
+  return t
+end
+
+-- a sprite moving from (x1,y1) to (x2,y2) over dur, fading out over the last `fade` fraction
+local function fxSprite(name, color, x1, y1, x2, y2, size, rot, dur, fade, grow)
+  local t = getSprite(name, color)
+  if not t then return end
+  t.x1, t.y1, t.x2, t.y2, t.size, t.t0, t.dur, t.fade, t.grow = x1, y1, x2, y2, size, now, dur, fade or 1, grow or 1
+  t:SetRotation(rot or 0)
+  t:SetSize(size, size)
 end
 
 function R.Resize(w, h)
@@ -169,20 +211,46 @@ local function getRing()
   return t
 end
 
-function R.Fx(S, kind, a, b, c)
-  if kind == "nova" then
-    local t = getRing()
-    if t then t.on, t.x, t.y, t.r, t.t0, t.dur = true, a, b, c, now, 0.35; t:SetVertexColor(0.5, 0.8, 1); t:Show() end
-  elseif kind == "chain" then
-    local pts, np = a, b
+local function ring(x, y, r, color, dur)
+  local t = getRing()
+  if t then
+    t.on, t.x, t.y, t.r, t.t0, t.dur = true, x, y, r, now, dur or 0.35
+    t:SetVertexColor(color[1], color[2], color[3])
+    t:Show()
+  end
+end
+
+local function line(x1, y1, x2, y2, color, thick, dur)
+  local l = getLine()
+  if not l then return end
+  l.on, l.t0, l.dur = true, now, dur or 0.2
+  l.x1, l.y1, l.x2, l.y2 = x1, y1, x2, y2
+  l:SetVertexColor(color[1], color[2], color[3], 1)
+  l:SetThickness(thick or 3)
+  l:Show()
+end
+
+function R.Fx(S, kind, a, b, c, d, e)
+  if kind == "nova" then -- x, y, r, weapon
+    ring(a, b, c, d.def.color)
+  elseif kind == "impact" then
+    ring(a, b, c, d.def.color, 0.3)
+  elseif kind == "slash" then -- x, y, angle, reach, weapon
+    fxSprite("slash", e.def.color, a, b, a, b, d * 2, c, 0.16, 0.6, 1.1)
+    if e.double then fxSprite("slash", e.def.color, a, b, a, b, d * 1.8, c + 0.5, 0.2, 0.6, 1.1) end
+  elseif kind == "fall" then -- x, y, delay, weapon
+    fxSprite(d.def.sprite or "star", d.def.color, a + 60, b + 320, a, b, 40, 0, c, 0.15)
+  elseif kind == "beam" then
+    line(a, b + 420, a, b, d.def.color, 5, 0.25)
+    ring(a, b, 22, d.def.color, 0.25)
+  elseif kind == "chain" then -- pts, n, weapon
+    local pts, np, w = a, b, c
+    local col = w.def.color
     for i = 1, np - 2, 2 do
-      local l = getLine()
-      if not l then break end
-      l.on, l.t0, l.dur = true, now, 0.2
-      l.x1, l.y1, l.x2, l.y2 = pts[i], pts[i + 1], pts[i + 2], pts[i + 3]
-      l:SetVertexColor(0.6, 0.8, 1, 1)
-      l:SetThickness(3)
-      l:Show()
+      line(pts[i], pts[i + 1], pts[i + 2], pts[i + 3], col, w.def.sprite and 2 or 3)
+      if w.def.sprite then
+        fxSprite(w.def.sprite, { 1, 1, 1 }, pts[i], pts[i + 1], pts[i + 2], pts[i + 3], 30, 0, 0.12 + i * 0.03, 0.3)
+      end
     end
   elseif kind == "swarm" then
     ns.UI.Banner("A swarm of bats closes in!", 0.9, 0.6, 1)
@@ -192,8 +260,8 @@ function R.Fx(S, kind, a, b, c)
   end
 end
 
-function R.Number(S, x, y, amt)
-  if numBudget <= 0 or not ns.db.numbers then return end
+function R.Number(S, x, y, amt, crit, isDot)
+  if (numBudget <= 0 and not crit) or not ns.db.numbers then return end
   local fs
   for i = 1, #numbers do if not numbers[i].on then fs = numbers[i]; break end end
   if not fs then
@@ -205,8 +273,16 @@ function R.Number(S, x, y, amt)
   numBudget = numBudget - 1
   fs.on, fs.x, fs.y, fs.t0 = true, x + (math.random() - 0.5) * 10, y, now
   fs:SetText(floor(amt + 0.5))
-  if amt >= 40 then fs:SetTextColor(1, 0.8, 0.2) else fs:SetTextColor(1, 1, 1) end
+  fs:SetFont(STANDARD_TEXT_FONT, crit and 16 or 12, "OUTLINE")
+  if crit then fs:SetTextColor(1, 0.5, 0.1)
+  elseif isDot then fs:SetTextColor(0.5, 1, 0.4)
+  elseif amt >= 40 then fs:SetTextColor(1, 0.8, 0.2)
+  else fs:SetTextColor(1, 1, 1) end
   fs:Show()
+end
+
+function R.Heal(S, amt)
+  if amt >= 1 then R.Number(S, S.p.x, S.p.y + 30, amt, false, true) end
 end
 
 function R.Hurt()
@@ -217,8 +293,9 @@ function R.Clear()
   for i = 1, #lines do lines[i].on = false; lines[i]:Hide() end
   for i = 1, #rings do rings[i].on = false; rings[i]:Hide() end
   for i = 1, #numbers do numbers[i].on = false; numbers[i]:Hide() end
-  for i = 1, #orbTex do orbTex[i]:Hide() end
-  auraTex:Hide()
+  for _, list in pairs(orbTex) do for i = 1, #list do list[i]:Hide() end end
+  for _, t in pairs(auraTex) do t:Hide() end
+  for i = 1, #sprites do sprites[i].on = false; sprites[i]:Hide() end
   playerTex:SetTexCoord(0, 1, 0, 1)
   playerTex:SetAlpha(1)
   flashTex.a = 0
@@ -342,35 +419,54 @@ function R.Draw(S, elapsed)
   for i = 1, S.nP do
     local pr = P[i]
     local t = pr.tex
-    if not t then t = acquire(pools.proj); pr.tex = t end
+    local d = pr.w.def
+    if not t then
+      t = acquire(projPool(pr.w)); pr.tex = t
+      if not d.spinSprite then t:SetRotation(math.atan2(pr.vy, pr.vx)) end
+    end
+    if d.spinSprite then t:SetRotation(now * 14) end
     place(t, pr.x + ox, pr.y + oy)
   end
 
   -- weapons with persistent visuals
-  local orbit, aura = S.weapons.orbit, S.weapons.aura
-  local nOrb = orbit and orbit.count or 0
-  for k = 1, nOrb do
-    local t = orbTex[k]
-    if not t then
-      t = world:CreateTexture(nil, "OVERLAY", nil, 0)
-      if not art(t, "orb") then t:SetTexture(CIRCLE); t:SetVertexColor(1, 0.85, 0.4) end
-      t:SetBlendMode("ADD")
-      orbTex[k] = t
+  local wl = S.wlist
+  for wi = 1, #wl do
+    local w = wl[wi]
+    local d = w.def
+    if d.type == "orbit" then
+      local list = orbTex[w.id]
+      if not list then list = {}; orbTex[w.id] = list end
+      for k = 1, w.count do
+        local t = list[k]
+        if not t then
+          t = world:CreateTexture(nil, "OVERLAY", nil, 0)
+          if not art(t, d.sprite or "orb") then
+            t:SetTexture(CIRCLE); t:SetVertexColor(d.color[1], d.color[2], d.color[3]); t:SetBlendMode("ADD")
+          end
+          list[k] = t
+        end
+        local sz = (w.size or 26) * p.area
+        t:SetSize(sz, sz)
+        if d.spinSprite then t:SetRotation(now * 9 + k) end
+        place(t, (w.orbs[2 * k - 1] or p.x) + ox, (w.orbs[2 * k] or p.y) + oy)
+        t:Show()
+      end
+      for k = w.count + 1, #list do list[k]:Hide() end
+    elseif d.type == "aura" then
+      local t = auraTex[w.id]
+      if not t then
+        t = world:CreateTexture(nil, "BORDER")
+        t:SetTexture(CIRCLE)
+        t:SetBlendMode("ADD")
+        t:SetVertexColor(d.color[1], d.color[2], d.color[3])
+        auraTex[w.id] = t
+      end
+      local dd = w.radius * p.area * 2
+      t:SetSize(dd, dd)
+      t:SetAlpha(0.16 + 0.06 * sin(now * 5))
+      place(t, W / 2, H / 2)
+      t:Show()
     end
-    local s = 26 * p.area
-    t:SetSize(s, s)
-    place(t, orbit.orbs[2 * k - 1] + ox, orbit.orbs[2 * k] + oy)
-    t:Show()
-  end
-  for k = nOrb + 1, #orbTex do orbTex[k]:Hide() end
-  if aura then
-    local d = aura.radius * p.area * 2
-    auraTex:SetSize(d, d)
-    auraTex:SetAlpha(0.16 + 0.06 * sin(now * 5))
-    place(auraTex, W / 2, H / 2)
-    auraTex:Show()
-  else
-    auraTex:Hide()
   end
 
   -- player
@@ -380,6 +476,20 @@ function R.Draw(S, elapsed)
   playerHp:SetValue(p.hp)
 
   -- fx
+  for i = 1, #sprites do
+    local t = sprites[i]
+    if t.on then
+      local f = (now - t.t0) / t.dur
+      if f >= 1 then t.on = false; t:Hide()
+      else
+        local sz = t.size * (1 + (t.grow - 1) * f)
+        t:SetSize(sz, sz)
+        place(t, t.x1 + (t.x2 - t.x1) * f + ox, t.y1 + (t.y2 - t.y1) * f + oy)
+        local fadeStart = 1 - t.fade
+        t:SetAlpha(f > fadeStart and (1 - (f - fadeStart) / t.fade) or 1)
+      end
+    end
+  end
   for i = 1, #rings do
     local t = rings[i]
     if t.on then

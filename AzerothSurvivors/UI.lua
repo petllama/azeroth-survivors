@@ -99,19 +99,63 @@ function UI.Init(frame)
   -- title
   local t = panel("title", frame)
   local title = font(t, 40)
-  title:SetPoint("CENTER", 0, 120)
+  title:SetPoint("TOP", 0, -40)
   title:SetText("Azeroth Survivors")
   title:SetTextColor(1, 0.82, 0)
   local sub = font(t, 14)
   sub:SetPoint("TOP", title, "BOTTOM", 0, -18)
   sub:SetWidth(560)
-  sub:SetText("Survive the Scourge for 10 minutes.\n\nMove with |cffffd100WASD|r or the |cffffd100arrow keys|r. Your spells cast themselves.\nCollect crystals to level up and choose upgrades.\n|cffffd100ESC|r pauses. Combat with real mobs pauses the game.")
-  t.best = font(t, 13)
-  t.best:SetPoint("TOP", sub, "BOTTOM", 0, -24)
-  t.best:SetTextColor(0.8, 0.8, 0.8)
-  local go = font(t, 18)
-  go:SetPoint("TOP", t.best, "BOTTOM", 0, -26)
-  go:SetText("Press |cff00ff00SPACE|r to start")
+  sub:SetText("Survive the Scourge for 10 minutes. Move with |cffffd100WASD|r or the |cffffd100arrow keys|r; your skills cast themselves.\nCollect crystals to level up and choose upgrades. |cffffd100ESC|r pauses. Combat with real mobs pauses the game.")
+  t.cards = {}
+  for i, id in ipairs(C.CLASS_ORDER) do
+    local cd = C.CLASSES[id]
+    local b = CreateFrame("Button", nil, t)
+    b:SetSize(230, 250)
+    b:SetPoint("TOP", sub, "BOTTOM", (i - 2) * 250, -26)
+    local bg = b:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0.1, 0.09, 0.13, 0.95)
+    b.edge = b:CreateTexture(nil, "BACKGROUND", nil, -1)
+    b.edge:SetPoint("TOPLEFT", -2, 2)
+    b.edge:SetPoint("BOTTOMRIGHT", 2, -2)
+    b.edge:SetColorTexture(0.4, 0.35, 0.25, 0.9)
+    b:SetHighlightTexture(WHITE)
+    b:GetHighlightTexture():SetVertexColor(1, 1, 1, 0.06)
+    local icon = b:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(56, 56)
+    icon:SetPoint("TOP", 0, -14)
+    icon:SetTexture(cd.icon)
+    local name = font(b, 18)
+    name:SetPoint("TOP", icon, "BOTTOM", 0, -6)
+    name:SetText(cd.name)
+    name:SetTextColor(cd.color[1], cd.color[2], cd.color[3])
+    local desc = font(b, 11, "")
+    desc:SetPoint("TOP", name, "BOTTOM", 0, -6)
+    desc:SetWidth(206)
+    desc:SetText(cd.desc .. string.format("\n|cffaaaaaa%d health, speed %d%s|r", cd.hp, cd.speed,
+      cd.crit > 0.1 and ", high crit" or (cd.armor > 0 and ", armored" or (cd.regen > 0 and ", regenerates" or ""))))
+    for k, wid in ipairs(cd.kit) do
+      local sk = b:CreateTexture(nil, "ARTWORK")
+      sk:SetSize(30, 30)
+      sk:SetPoint("BOTTOMLEFT", 14 + (k - 1) * 41, 34)
+      sk:SetTexture(C.WEAPONS[wid].icon)
+      sk:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    end
+    local startName = font(b, 10, "")
+    startName:SetPoint("BOTTOM", 0, 14)
+    startName:SetText("Starts with |cffffd100" .. C.WEAPONS[cd.start].name .. "|r")
+    b.best = font(b, 10, "")
+    b.best:SetPoint("BOTTOM", 0, 2)
+    b.best:SetTextColor(0.7, 0.7, 0.7)
+    local key = font(b, 14)
+    key:SetPoint("TOPLEFT", 8, -6)
+    key:SetText(i)
+    b:SetScript("OnClick", function() ns.StartClass(id) end)
+    t.cards[id] = b
+  end
+  local go = font(t, 16)
+  go:SetPoint("TOP", sub, "BOTTOM", 0, -300)
+  go:SetText("Press |cffffd1001|r |cffffd1002|r |cffffd1003|r or click a class.  |cff00ff00SPACE|r plays the highlighted one.")
 
   -- level up
   local l = panel("levelup", frame)
@@ -167,7 +211,7 @@ function UI.Init(frame)
   o.stats:SetWidth(520)
   local again = font(o, 16)
   again:SetPoint("TOP", o.stats, "BOTTOM", 0, -28)
-  again:SetText("|cff00ff00SPACE|r new run     |cffffd100ESC|r close")
+  again:SetText("|cff00ff00SPACE|r play again     |cffffd100C|r change class     |cffffd100ESC|r close")
 end
 
 function UI.Show(name)
@@ -178,12 +222,11 @@ end
 
 function UI.Showing(name) return panels[name] and panels[name]:IsShown() end
 
-function UI.TitleBest(db)
-  local b = db.best
-  if b then
-    panels.title.best:SetText(string.format("Best run: %s, level %d, %d kills%s", fmtTime(b.t), b.level, b.kills, b.won and "  |cff00ff00(victory)|r" or ""))
-  else
-    panels.title.best:SetText("")
+function UI.TitleBest(db, selected)
+  for id, card in pairs(panels.title.cards) do
+    local b = db.bestByClass and db.bestByClass[id]
+    card.best:SetText(b and string.format("Best: %s, level %d%s", fmtTime(b.t), b.level, b.won and " |cff00ff00victory|r" or "") or "")
+    if id == selected then card.edge:SetColorTexture(1, 0.82, 0, 1) else card.edge:SetColorTexture(0.4, 0.35, 0.25, 0.9) end
   end
 end
 
@@ -210,7 +253,8 @@ end
 
 function UI.Over(S, won, newBest)
   local o = panels.over
-  o.title:SetText(won and "Victory!" or "You have fallen")
+  local cd = C.CLASSES[S.class]
+  o.title:SetText((won and "Victory!" or "You have fallen") .. "\n|cff" .. string.format("%02x%02x%02x", cd.color[1] * 255, cd.color[2] * 255, cd.color[3] * 255) .. cd.name .. "|r")
   o.title:SetTextColor(won and 0.3 or 1, won and 1 or 0.25, won and 0.3 or 0.25)
   local w = {}
   for _, x in ipairs(S.wlist) do w[#w + 1] = C.WEAPONS[x.id].name .. " " .. x.level end
