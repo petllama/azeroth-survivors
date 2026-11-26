@@ -1,0 +1,639 @@
+-- Azeroth Survivors: the simulation. Pure Lua 5.1, no WoW API, so it runs offline (tests/run_sim.lua).
+-- The render layer listens through S.hooks; entities carry a render handle in .tex that the sim never reads.
+local _, ns = ...
+local C = ns.Content
+local Sim = {}
+ns.Sim = Sim
+
+local sqrt, floor, ceil, random, min, max, cos, sin = math.sqrt, math.floor, math.ceil, math.random, math.min, math.max, math.cos, math.sin
+local tremove = table.remove
+local TAU = math.pi * 2
+local CELL = 64
+local MAX_R = 40 -- largest enemy radius (boss); grid queries widen by this
+
+local function noop() end
+local NOHOOKS = { release = noop, number = noop, fx = noop, levelup = noop, hurt = noop, kill = noop, over = noop, pickup = noop }
+
+function Sim.HpScale(t) return 1 + t / 200 + (t / 400) ^ 2 end
+
+---------------------------------------------------------------------------
+-- setup
+---------------------------------------------------------------------------
+function Sim.New(opts)
+  opts = opts or {}
+  local P = C.PLAYER
+  local S = {
+    t = 0, kills = 0, state = "play", dmgDone = 0,
+    viewR = opts.viewR or 600,
+    cap = opts.cap or C.MAX_ENEMIES,
+    stress = opts.stress, invuln = opts.invuln or opts.stress,
+    hooks = setmetatable(opts.hooks or {}, { __index = NOHOOKS }),
+    p = { x = 0, y = 0, r = P.r, hp = P.hp, maxhp = P.hp, speed = P.speed, magnet = P.magnet, regen = 0,
+          armor = 0, might = 1, haste = 1, area = 1, iframes = 0, level = 1, xp = 0,
+          xpNext = C.XpForLevel(1), fx = 1, fy = 0, moving = false },
+    enemies = {}, nE = 0, projs = {}, nP = 0, gems = {}, nG = 0, items = {}, nI = 0,
+    enemyPool = {}, projPool = {}, gemPool = {},
+    weapons = {}, wlist = {}, passives = {}, plist = {},
+    spawnAcc = 0, nextElite = C.ELITE_EVERY, nextSwarm = C.SWARM_EVERY,
+    pendingLevels = 0, choices = nil,
+    grid = {}, gridUsed = {}, nUsed = 0, nBuckets = 0, q = {}, q2 = {}, targets = {},
+    nextId = 0, castId = 0,
+  }
+  Sim.AddWeapon(S, opts.weapon or "bolt")
+  return S
+end
+
+---------------------------------------------------------------------------
+-- upgrades
+---------------------------------------------------------------------------
+function Sim.AddWeapon(S, id)
+  local def = C.WEAPONS[id]
+  local w = { id = id, def = def, level = 1, timer = 0.4, angle = 0, orbs = {}, pts = {}, npts = 0 }
+  for k, v in pairs(def.base) do w[k] = v end
+  S.weapons[id] = w
+  S.wlist[#S.wlist + 1] = w
+  return w
+end
+
+function Sim.LevelWeapon(S, id)
+  local w = S.weapons[id]
+  w.level = w.level + 1
+  for k, v in pairs(w.def.levels[w.level] or {}) do
+    if k == "cdMul" then w.cd = w.cd * v
+    elseif k == "tickMul" then w.tick = w.tick * v
+    elseif k ~= "text" then w[k] = w[k] + v end
+  end
+end
+
+function Sim.AddPassive(S, id)
+  local d, p = C.PASSIVES[id], S.p
+  local lv = (S.passives[id] or 0) + 1
+  S.passives[id] = lv
+  if lv == 1 then S.plist[#S.plist + 1] = id end
+  if d.stat == "might" then p.might = p.might + d.add
+  elseif d.stat == "haste" then p.haste = p.haste * d.mul
+  elseif d.stat == "speed" then p.speed = p.speed + C.PLAYER.speed * d.mulAdd
+  elseif d.stat == "maxhp" then p.maxhp = p.maxhp + d.add; p.hp = p.hp + d.add
+  elseif d.stat == "regen" then p.regen = p.regen + d.add
+  elseif d.stat == "magnet" then p.magnet = p.magnet + C.PLAYER.magnet * d.mulAdd
+  elseif d.stat == "armor" then p.armor = p.armor + d.add
+  elseif d.stat == "area" then p.area = p.area + d.add end
+end
+
+-- Three weighted picks without replacement; upgrades of owned things weigh double.
+function Sim.RollChoices(S)
+  local pool, wts = {}, {}
+  local function add(c, wt) pool[#pool + 1] = c; wts[#wts + 1] = wt end
+  for _, id in ipairs(C.WEAPON_ORDER) do
+    local w = S.weapons[id]
+    if w then
+      if w.level < C.MAX_WEAPON_LEVEL then add({ kind = "weapon", id = id, level = w.level + 1 }, 2) end
+    elseif #S.wlist < C.WEAPON_SLOTS then
+      add({ kind = "weapon", id = id, level = 1 }, 1.2)
+    end
+  end
+  for _, id in ipairs(C.PASSIVE_ORDER) do
+    local lv = S.passives[id]
+    if lv then
+      if lv < C.MAX_PASSIVE_LEVEL then add({ kind = "passive", id = id, level = lv + 1 }, 1.5) end
+    elseif #S.plist < C.PASSIVE_SLOTS then
+      add({ kind = "passive", id = id, level = 1 }, 1)
+    end
+  end
+  local picks = {}
+  for _ = 1, 3 do
+    local total = 0
+    for i = 1, #wts do total = total + wts[i] end
+    if total <= 0 then break end
+    local r = random() * total
+    for i = 1, #wts do
+      r = r - wts[i]
+      if r <= 0 and wts[i] > 0 then picks[#picks + 1] = pool[i]; wts[i] = 0; break end
+    end
+  end
+  if #picks == 0 then picks[1] = { kind = "heal" } end
+  S.choices = picks
+  return picks
+end
+
+function Sim.ChoiceText(c)
+  if c.kind == "heal" then return "Healing Potion", "Restore 40 health.", "Interface\\Icons\\INV_Potion_54" end
+  if c.kind == "weapon" then
+    local d = C.WEAPONS[c.id]
+    local text = c.level == 1 and ("New! " .. d.desc) or (d.levels[c.level].text)
+    return d.name .. (c.level > 1 and (" " .. c.level) or ""), text, d.icon
+  end
+  local d = C.PASSIVES[c.id]
+  return d.name .. (c.level > 1 and (" " .. c.level) or ""), (c.level == 1 and "New! " or "") .. d.text, d.icon
+end
+
+function Sim.Choose(S, i)
+  local c = S.choices and S.choices[i]
+  if not c or S.state ~= "levelup" then return false end
+  if c.kind == "heal" then S.p.hp = min(S.p.maxhp, S.p.hp + 40)
+  elseif c.kind == "weapon" then
+    if S.weapons[c.id] then Sim.LevelWeapon(S, c.id) else Sim.AddWeapon(S, c.id) end
+  else Sim.AddPassive(S, c.id) end
+  S.choices = nil
+  S.pendingLevels = S.pendingLevels - 1
+  if S.pendingLevels > 0 then
+    Sim.RollChoices(S)
+    S.hooks.levelup(S)
+  else
+    S.state = "play"
+  end
+  return true
+end
+
+---------------------------------------------------------------------------
+-- spatial grid
+---------------------------------------------------------------------------
+local function key(cx, cy) return (cx + 30000) * 65536 + (cy + 30000) end
+
+local function gridBuild(S)
+  if S.nBuckets > 3000 then S.grid, S.nBuckets, S.nUsed = {}, 0, 0 end
+  local used, grid, E = S.gridUsed, S.grid, S.enemies
+  for i = 1, S.nUsed do used[i].n = 0 end
+  local nU = 0
+  for i = 1, S.nE do
+    local e = E[i]
+    if not e.dead then
+      local k = key(floor(e.x / CELL), floor(e.y / CELL))
+      local b = grid[k]
+      if not b then b = { n = 0 }; grid[k] = b; S.nBuckets = S.nBuckets + 1 end
+      if b.n == 0 then nU = nU + 1; used[nU] = b end
+      b.n = b.n + 1
+      b[b.n] = e
+    end
+  end
+  S.nUsed = nU
+end
+
+-- Fill `out` with live enemies whose body touches the circle (x, y, r). Returns the count.
+local function query(S, x, y, r, out)
+  local n, grid = 0, S.grid
+  local x0, x1 = floor((x - r - MAX_R) / CELL), floor((x + r + MAX_R) / CELL)
+  local y0, y1 = floor((y - r - MAX_R) / CELL), floor((y + r + MAX_R) / CELL)
+  for cx = x0, x1 do
+    for cy = y0, y1 do
+      local b = grid[key(cx, cy)]
+      if b then
+        for j = 1, b.n do
+          local e = b[j]
+          if not e.dead then
+            local dx, dy, rr = e.x - x, e.y - y, r + e.r
+            if dx * dx + dy * dy <= rr * rr then n = n + 1; out[n] = e end
+          end
+        end
+      end
+    end
+  end
+  return n
+end
+Sim.Query = query
+
+local function separate(S)
+  local used = S.gridUsed
+  for i = 1, S.nUsed do
+    local b = used[i]
+    local n = b.n
+    for a = 1, n do
+      local ea = b[a]
+      for c = a + 1, min(n, a + 6) do
+        local eb = b[c]
+        local dx, dy = eb.x - ea.x, eb.y - ea.y
+        local rr = (ea.r + eb.r) * 0.85
+        local d2 = dx * dx + dy * dy
+        if d2 < rr * rr then
+          local d = sqrt(d2)
+          if d < 0.01 then dx, dy, d = random() - 0.5, random() - 0.5, 0.5 end
+          local push = (rr - d) * 0.5 / d
+          local wa = eb.r / (ea.r + eb.r) -- heavier (bigger) enemies get pushed less
+          ea.x, ea.y = ea.x - dx * push * wa * 2, ea.y - dy * push * wa * 2
+          eb.x, eb.y = eb.x + dx * push * (1 - wa) * 2, eb.y + dy * push * (1 - wa) * 2
+        end
+      end
+    end
+  end
+end
+
+---------------------------------------------------------------------------
+-- entities
+---------------------------------------------------------------------------
+local function spawnEnemy(S, kind, x, y, force)
+  if S.nE >= S.cap and not force then return nil end
+  local d = C.ENEMIES[kind]
+  local e = tremove(S.enemyPool) or {}
+  local hs = d.boss and 1 or Sim.HpScale(S.t)
+  e.kind, e.def, e.x, e.y, e.r = kind, d, x, y, d.r
+  e.hp = d.hp * hs; e.maxhp = e.hp
+  e.speed = d.speed * (0.9 + random() * 0.2)
+  e.dmg = d.dmg * (1 + S.t / 600)
+  e.slow, e.flash, e.kx, e.ky, e.orbT, e.lastProj, e.chainId = 0, 0, 0, 0, -1, 0, 0
+  e.dead, e.face, e.tex = false, 1, nil
+  S.nE = S.nE + 1
+  S.enemies[S.nE] = e
+  if d.boss then S.boss = e end
+  return e
+end
+Sim.SpawnEnemy = spawnEnemy
+
+local function ringPos(S, dist)
+  local p = S.p
+  local a = random() * TAU
+  -- lean spawns toward where the player is heading
+  if p.moving and random() < 0.5 then a = math.atan2(p.fy, p.fx) + (random() - 0.5) * 1.6 end
+  return p.x + cos(a) * dist, p.y + sin(a) * dist
+end
+
+local function pickKind(t)
+  local mix = C.WAVES[1].mix
+  for i = #C.WAVES, 1, -1 do
+    if t >= C.WAVES[i].t then mix = C.WAVES[i].mix; break end
+  end
+  local total = 0
+  for _, wt in pairs(mix) do total = total + wt end
+  local r = random() * total
+  for kind, wt in pairs(mix) do
+    r = r - wt
+    if r <= 0 then return kind end
+  end
+  return "ghoul"
+end
+
+local function dropGem(S, x, y, xp)
+  if S.nG >= C.MAX_GEMS then
+    local g = S.gems[random(S.nG)]
+    g.xp = g.xp + xp
+    return
+  end
+  local g = tremove(S.gemPool) or {}
+  g.x, g.y, g.xp, g.pull, g.dead, g.tex = x + random() * 8 - 4, y + random() * 8 - 4, xp, false, false, nil
+  S.nG = S.nG + 1
+  S.gems[S.nG] = g
+end
+
+local function dropItem(S, kind, x, y)
+  local it = { kind = kind, x = x, y = y, dead = false }
+  S.nI = S.nI + 1
+  S.items[S.nI] = it
+end
+
+local function damage(S, e, amt, kx, ky)
+  if e.dead then return end
+  amt = amt * S.p.might
+  e.hp = e.hp - amt
+  e.flash = 0.12
+  S.dmgDone = S.dmgDone + amt
+  if kx and not e.def.boss then
+    local k = e.def.elite and 0.3 or 1
+    e.kx, e.ky = e.kx + kx * k, e.ky + ky * k
+  end
+  S.hooks.number(S, e.x, e.y + e.r, amt)
+  if e.hp <= 0 then
+    e.dead = true
+    S.kills = S.kills + 1
+    dropGem(S, e.x, e.y, e.def.xp)
+    if e.def.drop then dropItem(S, e.def.drop, e.x, e.y) end
+    if e == S.boss then S.boss = nil; S.bossKilled = true end
+    S.hooks.kill(S, e)
+  end
+end
+Sim.Damage = damage
+
+local function addXp(S, xp)
+  local p = S.p
+  p.xp = p.xp + xp
+  while p.xp >= p.xpNext do
+    p.xp = p.xp - p.xpNext
+    p.level = p.level + 1
+    p.xpNext = C.XpForLevel(p.level)
+    S.pendingLevels = S.pendingLevels + 1
+  end
+end
+
+local function hurtPlayer(S, e)
+  local p = S.p
+  if p.iframes > 0 then return end
+  local dmg = max(1, e.dmg - p.armor)
+  p.hp = p.hp - dmg
+  p.iframes = C.PLAYER.iframes
+  S.hooks.hurt(S, dmg)
+  if p.hp <= 0 then
+    if S.invuln then p.hp = p.maxhp
+    else p.hp = 0; S.state = "dead"; S.hooks.over(S, false) end
+  end
+end
+
+local function spawnProj(S, x, y, vx, vy, w)
+  local pr = tremove(S.projPool) or {}
+  S.nextId = S.nextId + 1
+  pr.id, pr.x, pr.y, pr.vx, pr.vy = S.nextId, x, y, vx, vy
+  pr.dmg, pr.pierce, pr.life, pr.dead, pr.tex = w.dmg, w.pierce, w.life, false, nil
+  S.nP = S.nP + 1
+  S.projs[S.nP] = pr
+end
+
+-- compact an entity list, returning dead ones to their pool
+local function compact(S, list, n, pool)
+  local j, release = 0, S.hooks.release
+  for i = 1, n do
+    local o = list[i]
+    if o.dead then
+      if o.tex then release(S, o) end
+      o.tex = nil
+      if pool then pool[#pool + 1] = o end
+    else
+      j = j + 1
+      list[j] = o
+    end
+  end
+  for i = j + 1, n do list[i] = nil end
+  return j
+end
+
+---------------------------------------------------------------------------
+-- weapons
+---------------------------------------------------------------------------
+local W = {}
+
+function W.bolt(S, w, dt)
+  w.timer = w.timer - dt
+  if w.timer > 0 then return end
+  w.timer = w.cd * S.p.haste
+  local p, E, T = S.p, S.enemies, S.targets
+  local range2 = (S.viewR * 0.9) ^ 2
+  local nT = 0
+  for k = 1, w.count do -- k nearest distinct targets (count is small)
+    local best, bd = nil, range2
+    for i = 1, S.nE do
+      local e = E[i]
+      if not e.dead then
+        local dx, dy = e.x - p.x, e.y - p.y
+        local d2 = dx * dx + dy * dy
+        if d2 < bd then
+          local taken = false
+          for j = 1, nT do if T[j] == e then taken = true; break end end
+          if not taken then best, bd = e, d2 end
+        end
+      end
+    end
+    if not best then break end
+    nT = nT + 1
+    T[nT] = best
+  end
+  for k = 1, w.count do
+    local tx, ty
+    local t = T[((k - 1) % max(nT, 1)) + 1]
+    if nT > 0 and t then tx, ty = t.x - p.x, t.y - p.y else tx, ty = p.fx, p.fy end
+    local a = math.atan2(ty, tx)
+    if k > nT and nT > 0 then a = a + (random() - 0.5) * 0.5 end
+    spawnProj(S, p.x, p.y, cos(a) * w.speed, sin(a) * w.speed, w)
+  end
+  for j = 1, nT do T[j] = nil end
+  S.hooks.fx(S, "cast", "bolt")
+end
+
+function W.orbit(S, w, dt)
+  local p, q = S.p, S.q
+  w.angle = (w.angle + w.spin * dt) % TAU
+  local R = w.radius * p.area
+  local hitR = 11 * p.area
+  for k = 1, w.count do
+    local a = w.angle + (k - 1) * TAU / w.count
+    local ox, oy = p.x + cos(a) * R, p.y + sin(a) * R
+    w.orbs[2 * k - 1], w.orbs[2 * k] = ox, oy
+    local n = query(S, ox, oy, hitR, q)
+    for i = 1, n do
+      local e = q[i]
+      if S.t - e.orbT >= w.hitcd then
+        e.orbT = S.t
+        local dx, dy = e.x - p.x, e.y - p.y
+        local d = sqrt(dx * dx + dy * dy) + 0.01
+        damage(S, e, w.dmg, dx / d * 90, dy / d * 90)
+      end
+    end
+  end
+end
+
+function W.aura(S, w, dt)
+  w.timer = w.timer - dt
+  if w.timer > 0 then return end
+  w.timer = w.tick
+  local p, q = S.p, S.q
+  local n = query(S, p.x, p.y, w.radius * p.area, q)
+  for i = 1, n do damage(S, q[i], w.dmg) end
+end
+
+function W.nova(S, w, dt)
+  w.timer = w.timer - dt
+  if w.timer > 0 then return end
+  w.timer = w.cd * S.p.haste
+  local p, q = S.p, S.q
+  local R = w.radius * p.area
+  local n = query(S, p.x, p.y, R, q)
+  for i = 1, n do
+    local e = q[i]
+    e.slow = w.slow
+    damage(S, e, w.dmg)
+  end
+  S.hooks.fx(S, "nova", p.x, p.y, R)
+end
+
+function W.chain(S, w, dt)
+  w.timer = w.timer - dt
+  if w.timer > 0 then return end
+  local p, q = S.p, S.q
+  local n = query(S, p.x, p.y, w.range * 1.6 * p.area, q)
+  if n == 0 then w.timer = 0.2; return end
+  w.timer = w.cd * S.p.haste
+  S.castId = S.castId + 1
+  local id = S.castId
+  local cur = q[random(n)]
+  local pts = w.pts
+  pts[1], pts[2] = p.x, p.y
+  local np = 2
+  for _ = 0, w.jumps do
+    cur.chainId = id
+    np = np + 2
+    pts[np - 1], pts[np] = cur.x, cur.y
+    damage(S, cur, w.dmg)
+    local m = query(S, cur.x, cur.y, w.range * p.area, q)
+    local best, bd = nil, math.huge
+    for i = 1, m do
+      local e = q[i]
+      if e.chainId ~= id then
+        local dx, dy = e.x - cur.x, e.y - cur.y
+        local d2 = dx * dx + dy * dy
+        if d2 < bd then best, bd = e, d2 end
+      end
+    end
+    if not best then break end
+    cur = best
+  end
+  w.npts = np
+  S.hooks.fx(S, "chain", pts, np)
+end
+
+---------------------------------------------------------------------------
+-- step
+---------------------------------------------------------------------------
+function Sim.Step(S, dt, ix, iy)
+  if S.state ~= "play" then return end
+  if dt > 0.05 then dt = 0.05 end
+  S.t = S.t + dt
+  local p = S.p
+
+  -- spawning
+  local target = min(S.cap, C.TargetPop(S.t))
+  S.spawnAcc = min(S.spawnAcc + dt * (S.stress and 400 or 25), S.stress and 50 or 6)
+  while S.spawnAcc >= 1 and S.nE < (S.stress and S.cap or target) do
+    S.spawnAcc = S.spawnAcc - 1
+    local x, y = ringPos(S, S.viewR + 30)
+    spawnEnemy(S, pickKind(S.t), x, y)
+  end
+  if S.t >= S.nextElite then
+    S.nextElite = S.nextElite + C.ELITE_EVERY
+    local x, y = ringPos(S, S.viewR + 40)
+    spawnEnemy(S, "elite", x, y, true)
+  end
+  if S.t >= S.nextSwarm then
+    S.nextSwarm = S.nextSwarm + C.SWARM_EVERY
+    local count = floor(20 + S.t / 15)
+    local a0 = random() * TAU
+    for i = 1, count do
+      local a = a0 + i * TAU / count
+      if S.nE < S.cap + 80 then
+        spawnEnemy(S, "bat", p.x + cos(a) * (S.viewR + 20), p.y + sin(a) * (S.viewR + 20), true)
+      end
+    end
+    S.hooks.fx(S, "swarm")
+  end
+  if not S.bossSpawned and S.t >= C.BOSS_AT then
+    S.bossSpawned = true
+    local x, y = ringPos(S, S.viewR + 60)
+    spawnEnemy(S, "boss", x, y, true)
+    S.hooks.fx(S, "boss")
+  end
+
+  -- player
+  ix, iy = ix or 0, iy or 0
+  local len = sqrt(ix * ix + iy * iy)
+  if len > 0 then
+    ix, iy = ix / len, iy / len
+    p.fx, p.fy = ix, iy
+    p.x, p.y = p.x + ix * p.speed * dt, p.y + iy * p.speed * dt
+    p.moving = true
+  else
+    p.moving = false
+  end
+  p.hp = min(p.maxhp, p.hp + p.regen * dt)
+  if p.iframes > 0 then p.iframes = p.iframes - dt end
+
+  -- enemies
+  local E, far = S.enemies, S.viewR * 1.7
+  for i = 1, S.nE do
+    local e = E[i]
+    if not e.dead then
+      local dx, dy = p.x - e.x, p.y - e.y
+      local d = sqrt(dx * dx + dy * dy)
+      if d > far and not e.def.boss and not e.def.elite then
+        e.x, e.y = ringPos(S, S.viewR + 30) -- left behind: come back from ahead
+      elseif d > 0.001 then
+        local sp = e.speed * (e.slow > 0 and 0.45 or 1) * dt
+        e.x = e.x + dx / d * sp + e.kx * dt
+        e.y = e.y + dy / d * sp + e.ky * dt
+        e.face = dx < 0 and -1 or 1
+        if d < e.r + p.r then hurtPlayer(S, e) end
+      end
+      if e.kx ~= 0 then
+        local f = max(0, 1 - 10 * dt)
+        e.kx, e.ky = e.kx * f, e.ky * f
+        if e.kx * e.kx + e.ky * e.ky < 1 then e.kx, e.ky = 0, 0 end
+      end
+      if e.slow > 0 then e.slow = e.slow - dt end
+      if e.flash > 0 then e.flash = e.flash - dt end
+    end
+  end
+  if S.state ~= "play" then return end
+
+  gridBuild(S)
+  separate(S)
+
+  -- weapons
+  for i = 1, #S.wlist do
+    local w = S.wlist[i]
+    W[w.id](S, w, dt)
+  end
+
+  -- projectiles
+  local P, q = S.projs, S.q2
+  for i = 1, S.nP do
+    local pr = P[i]
+    pr.x, pr.y = pr.x + pr.vx * dt, pr.y + pr.vy * dt
+    pr.life = pr.life - dt
+    if pr.life <= 0 then
+      pr.dead = true
+    else
+      local n = query(S, pr.x, pr.y, 6, q)
+      for k = 1, n do
+        local e = q[k]
+        if e.lastProj ~= pr.id then
+          e.lastProj = pr.id
+          damage(S, e, pr.dmg, pr.vx * 0.25, pr.vy * 0.25)
+          pr.pierce = pr.pierce - 1
+          if pr.pierce <= 0 then pr.dead = true; break end
+        end
+      end
+    end
+  end
+
+  -- gems
+  local G = S.gems
+  local mag2 = p.magnet * p.magnet
+  local pull = 420 * dt
+  for i = 1, S.nG do
+    local g = G[i]
+    local dx, dy = p.x - g.x, p.y - g.y
+    local d2 = dx * dx + dy * dy
+    if g.pull or d2 < mag2 then
+      g.pull = true
+      local d = sqrt(d2)
+      if d < p.r + 6 then
+        g.dead = true
+        addXp(S, g.xp)
+        S.hooks.pickup(S, "gem")
+      else
+        local step = min(d, pull)
+        g.x, g.y = g.x + dx / d * step, g.y + dy / d * step
+      end
+    end
+  end
+
+  -- items
+  for i = 1, S.nI do
+    local it = S.items[i]
+    local dx, dy = p.x - it.x, p.y - it.y
+    if dx * dx + dy * dy < (p.r + 16) ^ 2 then
+      it.dead = true
+      if it.kind == "potion" then p.hp = min(p.maxhp, p.hp + p.maxhp * 0.3) end
+      S.hooks.pickup(S, it.kind)
+    end
+  end
+
+  S.nE = compact(S, E, S.nE, S.enemyPool)
+  S.nP = compact(S, P, S.nP, S.projPool)
+  S.nG = compact(S, G, S.nG, S.gemPool)
+  S.nI = compact(S, S.items, S.nI, nil)
+
+  if S.t >= C.RUN_SECONDS and not S.stress then
+    S.state = "won"
+    S.hooks.over(S, true)
+    return
+  end
+  if S.pendingLevels > 0 then
+    S.state = "levelup"
+    Sim.RollChoices(S)
+    S.hooks.levelup(S)
+  end
+end

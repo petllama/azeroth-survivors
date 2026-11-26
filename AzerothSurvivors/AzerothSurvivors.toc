@@ -1,0 +1,14 @@
+## Interface: 16001
+## Title: Azeroth Survivors
+## Notes: A Vampire Survivors-style arcade game inside WoW. /azs to play.
+## Author: petllama
+## Version: 0.1.0
+## SavedVariables: AzerothSurvivorsDB
+## AddonCompartmentFunc: AzerothSurvivors_OnAddonCompartmentClick
+## IconTexture: Interface\Icons\Spell_Shadow_RaiseDead
+
+Content.lua
+Sim.lua
+Render.lua
+UI.lua
+Main.lua

@@ -1,0 +1,420 @@
+-- Azeroth Survivors: drawing. Turns the sim's entities into pooled textures on the arena frame.
+local _, ns = ...
+local C = ns.Content
+local R = {}
+ns.Render = R
+
+local sin, floor, min, max, tremove = math.sin, math.floor, math.min, math.max, table.remove
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+local CIRCLE = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
+local ART = "Interface\\AddOns\\AzerothSurvivors\\Art\\"
+
+-- Art/*.tga ships with the addon. Fallbacks (raid icons, circles) keep the game playable without it.
+R.USE_ART = true
+local FALLBACK = {
+  ghoul  = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8", 0.75, 0.95, 0.65 },
+  bat    = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_7", 0.9, 0.6, 0.9 },
+  wraith = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_5", 0.6, 0.8, 1 },
+  brute  = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_6", 0.6, 1, 0.6 },
+  elite  = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_1", 1, 1, 1 },
+  boss   = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8", 0.6, 0.85, 1 },
+}
+
+local W, H = 1000, 700
+local frame, world, fxLayer
+local pools = {}
+local playerTex, playerHp, auraTex, groundTex, flashTex
+local orbTex = {}
+local lines, rings, numbers = {}, {}, {}
+local gridLines = {}
+local numBudget = 0
+local now = 0
+
+local function newPool(name, layer, sub, setup)
+  local p = { free = {}, layer = layer, sub = sub, setup = setup, name = name }
+  pools[name] = p
+  return p
+end
+
+local function acquire(p)
+  local t = tremove(p.free)
+  if not t then
+    t = world:CreateTexture(nil, p.layer, nil, p.sub)
+    t.pool = p
+    p.setup(t)
+  end
+  t:Show()
+  return t
+end
+
+-- sim hook: an entity died / was collected
+function R.Release(_, o)
+  local t = o.tex
+  t:Hide()
+  local f = t.pool.free
+  f[#f + 1] = t
+  o.vis = nil
+end
+
+local function art(t, name, fallback)
+  if R.USE_ART then
+    t:SetTexture(ART .. name)
+  elseif fallback then
+    t:SetTexture(fallback[1])
+    t:SetVertexColor(fallback[2], fallback[3], fallback[4])
+  end
+end
+
+function R.Init(parent, w, h)
+  frame, W, H = parent, w, h
+  world = CreateFrame("Frame", nil, frame)
+  world:SetAllPoints()
+  world:SetClipsChildren(true)
+  R.world = world
+
+  local bg = world:CreateTexture(nil, "BACKGROUND", nil, -8)
+  bg:SetAllPoints()
+  bg:SetColorTexture(0.05, 0.06, 0.05, 1)
+
+  if R.USE_ART then
+    groundTex = world:CreateTexture(nil, "BACKGROUND", nil, -7)
+    groundTex:SetAllPoints()
+    groundTex:SetTexture(ART .. "ground", "REPEAT", "REPEAT")
+    groundTex:SetVertexColor(0.8, 0.8, 0.8)
+  else
+    for i = 1, 40 do
+      local l = world:CreateTexture(nil, "BACKGROUND", nil, -6)
+      l:SetColorTexture(1, 1, 1, 0.04)
+      gridLines[i] = l
+    end
+  end
+
+  auraTex = world:CreateTexture(nil, "BORDER")
+  auraTex:SetTexture(CIRCLE)
+  auraTex:SetVertexColor(1, 0.8, 0.3, 0.22)
+  auraTex:SetBlendMode("ADD")
+  auraTex:Hide()
+
+  for kind, d in pairs(C.ENEMIES) do
+    newPool(kind, "ARTWORK", d.boss and 3 or (d.elite and 2 or 1), function(t)
+      art(t, kind, FALLBACK[kind])
+      t:SetSize(d.size, d.size)
+    end)
+  end
+  newPool("gem", "ARTWORK", -2, function(t)
+    if R.USE_ART then t:SetTexture(ART .. "gem") else t:SetTexture(WHITE); t:SetRotation(math.pi / 4) end
+  end)
+  newPool("potion", "ARTWORK", -1, function(t)
+    if R.USE_ART then t:SetTexture(ART .. "potion") else t:SetTexture("Interface\\Icons\\INV_Potion_54") end
+    t:SetSize(22, 22)
+  end)
+  newPool("proj", "OVERLAY", 1, function(t)
+    if R.USE_ART then t:SetTexture(ART .. "bolt") else t:SetTexture(CIRCLE); t:SetVertexColor(0.95, 0.5, 1) end
+    t:SetBlendMode("ADD")
+    t:SetSize(18, 18)
+  end)
+
+  playerTex = world:CreateTexture(nil, "ARTWORK", nil, 5)
+  playerTex:SetSize(40, 40)
+  playerTex:SetPoint("CENTER", world, "BOTTOMLEFT", W / 2, H / 2)
+  if R.USE_ART then playerTex:SetTexture(ART .. "hero") else SetPortraitTexture(playerTex, "player") end
+
+  playerHp = CreateFrame("StatusBar", nil, world)
+  playerHp:SetSize(40, 4)
+  playerHp:SetPoint("TOP", playerTex, "BOTTOM", 0, -2)
+  playerHp:SetStatusBarTexture(WHITE)
+  playerHp:SetStatusBarColor(0.9, 0.15, 0.15)
+  local hb = playerHp:CreateTexture(nil, "BACKGROUND")
+  hb:SetAllPoints()
+  hb:SetColorTexture(0, 0, 0, 0.7)
+
+  fxLayer = CreateFrame("Frame", nil, world)
+  fxLayer:SetAllPoints()
+  fxLayer:SetFrameLevel(world:GetFrameLevel() + 5)
+
+  flashTex = fxLayer:CreateTexture(nil, "OVERLAY", nil, 7)
+  flashTex:SetAllPoints()
+  flashTex:SetColorTexture(0.8, 0, 0, 1)
+  flashTex:SetAlpha(0)
+  flashTex.a = 0
+end
+
+function R.Resize(w, h)
+  W, H = w, h
+  playerTex:SetPoint("CENTER", world, "BOTTOMLEFT", W / 2, H / 2)
+end
+
+---------------------------------------------------------------------------
+-- effects
+---------------------------------------------------------------------------
+local function getLine()
+  for i = 1, #lines do if not lines[i].on then return lines[i] end end
+  if #lines >= 60 then return nil end
+  local l = fxLayer:CreateLine(nil, "OVERLAY")
+  l:SetTexture(WHITE)
+  l:SetBlendMode("ADD")
+  lines[#lines + 1] = l
+  return l
+end
+
+local function getRing()
+  for i = 1, #rings do if not rings[i].on then return rings[i] end end
+  if #rings >= 12 then return nil end
+  local t = world:CreateTexture(nil, "OVERLAY", nil, 2)
+  t:SetTexture(CIRCLE)
+  t:SetBlendMode("ADD")
+  rings[#rings + 1] = t
+  return t
+end
+
+function R.Fx(S, kind, a, b, c)
+  if kind == "nova" then
+    local t = getRing()
+    if t then t.on, t.x, t.y, t.r, t.t0, t.dur = true, a, b, c, now, 0.35; t:SetVertexColor(0.5, 0.8, 1); t:Show() end
+  elseif kind == "chain" then
+    local pts, np = a, b
+    for i = 1, np - 2, 2 do
+      local l = getLine()
+      if not l then break end
+      l.on, l.t0, l.dur = true, now, 0.2
+      l.x1, l.y1, l.x2, l.y2 = pts[i], pts[i + 1], pts[i + 2], pts[i + 3]
+      l:SetVertexColor(0.6, 0.8, 1, 1)
+      l:SetThickness(3)
+      l:Show()
+    end
+  elseif kind == "swarm" then
+    ns.UI.Banner("A swarm of bats closes in!", 0.9, 0.6, 1)
+  elseif kind == "boss" then
+    ns.UI.Banner("The Frost Lich has come for you!", 0.5, 0.8, 1)
+    ns.PlaySound(8959) -- raid warning
+  end
+end
+
+function R.Number(S, x, y, amt)
+  if numBudget <= 0 or not ns.db.numbers then return end
+  local fs
+  for i = 1, #numbers do if not numbers[i].on then fs = numbers[i]; break end end
+  if not fs then
+    if #numbers >= 50 then return end
+    fs = fxLayer:CreateFontString(nil, "OVERLAY")
+    fs:SetFont(STANDARD_TEXT_FONT, 12, "OUTLINE")
+    numbers[#numbers + 1] = fs
+  end
+  numBudget = numBudget - 1
+  fs.on, fs.x, fs.y, fs.t0 = true, x + (math.random() - 0.5) * 10, y, now
+  fs:SetText(floor(amt + 0.5))
+  if amt >= 40 then fs:SetTextColor(1, 0.8, 0.2) else fs:SetTextColor(1, 1, 1) end
+  fs:Show()
+end
+
+function R.Hurt()
+  flashTex.a = 0.28
+end
+
+function R.Clear()
+  for _, p in pairs(pools) do end
+  for i = 1, #lines do lines[i].on = false; lines[i]:Hide() end
+  for i = 1, #rings do rings[i].on = false; rings[i]:Hide() end
+  for i = 1, #numbers do numbers[i].on = false; numbers[i]:Hide() end
+  for i = 1, #orbTex do orbTex[i]:Hide() end
+  auraTex:Hide()
+  flashTex.a = 0
+  flashTex:SetAlpha(0)
+end
+
+-- Return every texture of a finished run to its pool.
+function R.ReleaseAll(S)
+  for _, list in ipairs({ S.enemies, S.projs, S.gems, S.items }) do
+    for i = 1, #list do
+      local o = list[i]
+      if o.tex then R.Release(S, o); o.tex = nil end
+    end
+  end
+  R.Clear()
+end
+
+---------------------------------------------------------------------------
+-- frame draw
+---------------------------------------------------------------------------
+local function place(t, sx, sy)
+  t:SetPoint("CENTER", world, "BOTTOMLEFT", sx, sy)
+end
+
+function R.Draw(S, elapsed)
+  now = now + elapsed
+  numBudget = 6
+  local p = S.p
+  local ox, oy = W / 2 - p.x, H / 2 - p.y
+
+  -- ground
+  if groundTex then
+    local T = 256
+    local u0, v0 = -ox / T, oy / T
+    groundTex:SetTexCoord(u0, u0 + W / T, v0, v0 + H / T)
+  else
+    local G = 64
+    local n = 0
+    local x0 = ox % G
+    for x = x0, W, G do
+      n = n + 1
+      local l = gridLines[n]
+      if not l then break end
+      l:ClearAllPoints(); l:SetPoint("TOPLEFT", world, "TOPLEFT", x, 0); l:SetSize(1, H); l:Show()
+    end
+    local y0 = oy % G
+    for y = y0, H, G do
+      n = n + 1
+      local l = gridLines[n]
+      if not l then break end
+      l:ClearAllPoints(); l:SetPoint("BOTTOMLEFT", world, "BOTTOMLEFT", 0, y); l:SetSize(W, 1); l:Show()
+    end
+    for i = n + 1, #gridLines do gridLines[i]:Hide() end
+  end
+
+  -- enemies
+  local E = S.enemies
+  local Wm, Hm = W + 70, H + 70
+  for i = 1, S.nE do
+    local e = E[i]
+    local sx, sy = e.x + ox, e.y + oy
+    if sx > -70 and sx < Wm and sy > -70 and sy < Hm then
+      local t = e.tex
+      if not t then
+        t = acquire(pools[e.kind]); e.tex = t; e.vis = true; e.tint = nil; e.tface = nil
+      elseif not e.vis then
+        t:Show(); e.vis = true
+      end
+      place(t, sx, sy + sin(now * 9 + i) * 1.5)
+      local tint = (e.flash > 0 and 1) or (e.slow > 0 and 2) or 0
+      if tint ~= e.tint then
+        e.tint = tint
+        if tint == 1 then t:SetVertexColor(1, 0.35, 0.35)
+        elseif tint == 2 then t:SetVertexColor(0.55, 0.75, 1)
+        elseif R.USE_ART then t:SetVertexColor(1, 1, 1)
+        else local f = FALLBACK[e.kind]; t:SetVertexColor(f[2], f[3], f[4]) end
+      end
+      if e.face ~= e.tface then
+        e.tface = e.face
+        if e.face < 0 then t:SetTexCoord(1, 0, 0, 1) else t:SetTexCoord(0, 1, 0, 1) end
+      end
+    elseif e.vis then
+      e.tex:Hide(); e.vis = false
+    end
+  end
+
+  -- gems
+  local G = S.gems
+  for i = 1, S.nG do
+    local g = G[i]
+    local sx, sy = g.x + ox, g.y + oy
+    if sx > -20 and sx < W + 20 and sy > -20 and sy < H + 20 then
+      local t = g.tex
+      if not t then t = acquire(pools.gem); g.tex = t; g.vis = true; g.tc = nil
+      elseif not g.vis then t:Show(); g.vis = true end
+      place(t, sx, sy)
+      local tc = g.xp >= 20 and 3 or (g.xp >= 5 and 2 or 1)
+      if tc ~= g.tc then
+        g.tc = tc
+        local s = tc == 3 and 18 or (tc == 2 and 14 or 11)
+        t:SetSize(s, s)
+        if tc == 3 then t:SetVertexColor(1, 0.35, 0.3)
+        elseif tc == 2 then t:SetVertexColor(0.4, 1, 0.45)
+        else t:SetVertexColor(0.45, 0.85, 1) end
+      end
+    elseif g.vis then
+      g.tex:Hide(); g.vis = false
+    end
+  end
+
+  -- items
+  for i = 1, S.nI do
+    local it = S.items[i]
+    local t = it.tex
+    if not t then t = acquire(pools[it.kind]); it.tex = t end
+    place(t, it.x + ox, it.y + oy + sin(now * 4) * 3)
+  end
+
+  -- projectiles
+  local P = S.projs
+  for i = 1, S.nP do
+    local pr = P[i]
+    local t = pr.tex
+    if not t then t = acquire(pools.proj); pr.tex = t end
+    place(t, pr.x + ox, pr.y + oy)
+  end
+
+  -- weapons with persistent visuals
+  local orbit, aura = S.weapons.orbit, S.weapons.aura
+  local nOrb = orbit and orbit.count or 0
+  for k = 1, nOrb do
+    local t = orbTex[k]
+    if not t then
+      t = world:CreateTexture(nil, "OVERLAY", nil, 0)
+      if R.USE_ART then t:SetTexture(ART .. "orb") else t:SetTexture(CIRCLE); t:SetVertexColor(1, 0.85, 0.4) end
+      t:SetBlendMode("ADD")
+      orbTex[k] = t
+    end
+    local s = 26 * p.area
+    t:SetSize(s, s)
+    place(t, orbit.orbs[2 * k - 1] + ox, orbit.orbs[2 * k] + oy)
+    t:Show()
+  end
+  for k = nOrb + 1, #orbTex do orbTex[k]:Hide() end
+  if aura then
+    local d = aura.radius * p.area * 2
+    auraTex:SetSize(d, d)
+    auraTex:SetAlpha(0.16 + 0.06 * sin(now * 5))
+    place(auraTex, W / 2, H / 2)
+    auraTex:Show()
+  else
+    auraTex:Hide()
+  end
+
+  -- player
+  if p.fx < -0.05 then playerTex:SetTexCoord(1, 0, 0, 1) elseif p.fx > 0.05 then playerTex:SetTexCoord(0, 1, 0, 1) end
+  playerTex:SetAlpha(p.iframes > 0 and (floor(now * 20) % 2 == 0 and 0.4 or 1) or 1)
+  playerHp:SetMinMaxValues(0, p.maxhp)
+  playerHp:SetValue(p.hp)
+
+  -- fx
+  for i = 1, #rings do
+    local t = rings[i]
+    if t.on then
+      local f = (now - t.t0) / t.dur
+      if f >= 1 then t.on = false; t:Hide()
+      else
+        local d = t.r * 2 * (0.3 + 0.7 * f)
+        t:SetSize(d, d)
+        t:SetAlpha(0.5 * (1 - f))
+        place(t, t.x + ox, t.y + oy)
+      end
+    end
+  end
+  for i = 1, #lines do
+    local l = lines[i]
+    if l.on then
+      local f = (now - l.t0) / l.dur
+      if f >= 1 then l.on = false; l:Hide()
+      else
+        l:SetStartPoint("BOTTOMLEFT", world, l.x1 + ox, l.y1 + oy)
+        l:SetEndPoint("BOTTOMLEFT", world, l.x2 + ox, l.y2 + oy)
+        l:SetAlpha(1 - f)
+      end
+    end
+  end
+  for i = 1, #numbers do
+    local fs = numbers[i]
+    if fs.on then
+      local f = (now - fs.t0) / 0.6
+      if f >= 1 then fs.on = false; fs:Hide()
+      else
+        fs:SetPoint("CENTER", world, "BOTTOMLEFT", fs.x + ox, fs.y + oy + f * 24)
+        fs:SetAlpha(1 - f * f)
+      end
+    end
+  end
+  if flashTex.a > 0 then
+    flashTex.a = max(0, flashTex.a - elapsed * 1.2)
+    flashTex:SetAlpha(flashTex.a)
+  end
+end
