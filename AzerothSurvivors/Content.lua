@@ -266,7 +266,6 @@ C.PLAYER = { magnet = 55, r = 12, iframes = 0.45 } -- hp/speed/armor/crit/regen 
 
 -- XP needed for the next level
 function C.XpForLevel(level)
-  if level < 20 then return 5 + (level - 1) * 4 end
-  if level < 40 then return 81 + (level - 20) * 7 end
-  return 221 + (level - 40) * 12
+  -- about half the old pace: ~level 3 at 1:00, 10 at 2:00, 35-60 by 10:00 depending on the build
+  return 5 + (level - 1) * 6 + math.floor((level - 1) ^ 2 * 0.15)
 end

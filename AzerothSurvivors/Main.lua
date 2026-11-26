@@ -2,7 +2,7 @@
 local addonName, ns = ...
 local C, Sim, R, UI = ns.Content, ns.Sim, ns.Render, ns.UI
 
-local DEFAULTS = { numbers = true, debug = false, scale = 1, runs = 0, class = "paladin" }
+local DEFAULTS = { anim = true, numbers = true, debug = false, scale = 1, runs = 0, class = "paladin" }
 local frame, S
 local mode = "title" -- title | play | levelup | pause | over
 local stressCap
@@ -33,6 +33,7 @@ local hooks = {
   fx = R.Fx,
   hurt = function() R.Hurt() end,
   heal = R.Heal,
+  kill = R.Kill,
   levelup = function(s)
     mode = "levelup"
     UI.LevelUp(s)
@@ -258,6 +259,9 @@ SlashCmdList.AZEROTHSURVIVORS = function(msg)
   elseif cmd == "debug" then
     ns.db.debug = not ns.db.debug
     P("debug overlay " .. (ns.db.debug and "on" or "off"))
+  elseif cmd == "anim" then
+    ns.db.anim = not ns.db.anim
+    P("animations " .. (ns.db.anim and "on" or "off"))
   elseif cmd == "numbers" then
     ns.db.numbers = not ns.db.numbers
     P("damage numbers " .. (ns.db.numbers and "on" or "off"))
@@ -276,7 +280,7 @@ SlashCmdList.AZEROTHSURVIVORS = function(msg)
     frame:SetPoint("CENTER")
     P("window position reset")
   else
-    P("/azs  open/close   /azs stress N  stress test with N enemies   /azs debug  fps overlay   /azs numbers  damage numbers   /azs scale 0.8   /azs reset")
+    P("/azs  open/close   /azs stress N  stress test with N enemies   /azs debug  fps overlay   /azs anim  animations on/off   /azs numbers  damage numbers   /azs scale 0.8   /azs reset")
   end
 end
 

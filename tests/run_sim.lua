@@ -19,6 +19,7 @@ local dt = 1 / 60
 local clock = os.clock
 local worst, total, steps = 0, 0, 0
 local maxE = 0
+local marks, nextMark = {}, 60
 local function bot()
   -- kite: move away from the weighted centre of nearby enemies, with a slow circular drift
   local p = S.p
@@ -54,6 +55,7 @@ while S.t < limit and S.state ~= "dead" and S.state ~= "won" do
     total, steps = total + el, steps + 1
     if S.t > 2 and el > worst then worst = el end
     if S.nE > maxE then maxE = S.nE end
+    if S.t >= nextMark then marks[#marks + 1] = string.format("%d:%d", nextMark / 60, S.p.level); nextMark = nextMark + 60 end
   end
 end
 
@@ -64,6 +66,7 @@ for _, id in ipairs(S.plist) do passives[#passives + 1] = id .. S.passives[id] e
 print(string.format(class .. " %s seed=%d result=%s t=%.0fs level=%d kills=%d hp=%.0f/%.0f maxEnemies=%d gems=%d",
   mode, seed, S.state, S.t, S.p.level, S.kills, S.p.hp, S.p.maxhp, maxE, S.nG))
 local killer = S.lastHit and S.lastHit.kind or "-"
+print("  level by minute: " .. table.concat(marks, " "))
 print("  last hit by: " .. killer .. "   boss " .. (S.bossKilled and "killed" or (S.bossSpawned and "alive" or "not spawned")))
 print("  weapons: " .. table.concat(weapons, " ") .. "   passives: " .. table.concat(passives, " "))
 print(string.format("  step ms: avg %.3f worst %.3f  (%s, lua mem %.0f KB)", total / steps, worst, _VERSION, collectgarbage("count")))

@@ -4,7 +4,20 @@ local C = ns.Content
 local R = {}
 ns.Render = R
 
-local sin, floor, min, max, tremove = math.sin, math.floor, math.min, math.max, table.remove
+local sin, floor, min, max, abs, tremove = math.sin, math.floor, math.min, math.max, math.abs, table.remove
+
+-- Movement animation per kind. rate: cycle speed; bob: px; hover: smooth float instead of steps;
+-- rot: sway in radians; sq: squash and stretch; flap: wing beat (width); alpha: fade low point.
+local ANIM = {
+  ghoul  = { rate = 7,   bob = 3,   rot = 0.14, sq = 0.04 },
+  bat    = { rate = 16,  bob = 4,   rot = 0.06, sq = 0,    hover = true, flap = 0.22 },
+  wraith = { rate = 3,   bob = 5,   rot = 0.06, sq = 0.03, hover = true, alpha = 0.6 },
+  brute  = { rate = 4.5, bob = 4,   rot = 0.08, sq = 0.07 },
+  elite  = { rate = 6,   bob = 2.5, rot = 0.08, sq = 0.03 },
+  boss   = { rate = 2.2, bob = 7,   rot = 0.03, sq = 0.03, hover = true },
+}
+local HERO_WALK = { rate = 11, bob = 3.5, rot = 0.1, sq = 0.05 }
+local heroAt = 0
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local CIRCLE = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 local ART = "Interface\\AddOns\\AzerothSurvivors\\Art\\"
@@ -281,6 +294,18 @@ function R.Number(S, x, y, amt, crit, isDot)
   fs:Show()
 end
 
+-- dying enemies pop: the sprite flashes red, swells and fades
+function R.Kill(S, e)
+  if not ns.db.anim or e.vis == false then return end
+  local d = e.def
+  local t = getSprite(e.kind, { 1, 0.4, 0.4 })
+  if not t then return end
+  t:SetBlendMode("BLEND")
+  t.x1, t.y1, t.x2, t.y2, t.size, t.t0, t.dur, t.fade, t.grow = e.x, e.y, e.x, e.y + 10, d.size, now, 0.25, 1, 1.35
+  t:SetRotation(0)
+  t:SetSize(d.size, d.size)
+end
+
 function R.Heal(S, amt)
   if amt >= 1 then R.Number(S, S.p.x, S.p.y + 30, amt, false, true) end
 end
@@ -351,25 +376,47 @@ function R.Draw(S, elapsed)
     for i = n + 1, #gridLines do gridLines[i]:Hide() end
   end
 
-  -- enemies
+  -- enemies (procedural animation: each kind has its own gait, see ANIM)
   local E = S.enemies
+  local anim = ns.db.anim
   for i = 1, S.nE do
     local e = E[i]
     local sx, sy = e.x + ox, e.y + oy
-    local m = e.def.size * 0.5 + 4
+    local d = e.def
+    local m = d.size * 0.6 + 6
     if sx > -m and sx < W + m and sy > -m and sy < H + m then
       local t = e.tex
       if not t then
         t = acquire(pools[e.kind]); e.tex = t; e.vis = true; e.tint = nil; e.tface = nil
+        e.at = math.random() * 6.3
       elseif not e.vis then
         t:Show(); e.vis = true
       end
-      place(t, sx, sy + sin(now * 9 + i) * 1.5)
-      local tint = (e.flash > 0 and 1) or (e.slow > 0 and 2) or 0
+      local tint = (e.flash > 0 and 1) or (e.root > 0 and 3) or (e.slow > 0 and 2) or 0
+      if anim then
+        local a = ANIM[e.kind]
+        local rate = a.rate * (e.root > 0 and 0 or (e.slow > 0 and 0.45 or 1))
+        local at = e.at + elapsed * rate
+        e.at = at
+        local s1, s2 = sin(at), sin(at * 2)
+        local bob = a.hover and (s1 * a.bob) or (abs(s1) * a.bob)
+        local size = d.size
+        if a.flap then
+          t:SetSize(size * (1 + a.flap * s2), size * (1 - a.flap * 0.3 * s2))
+        else
+          t:SetSize(size * (1 + a.sq * s2), size * (1 - a.sq * s2))
+        end
+        t:SetRotation(a.rot * s1 * e.face)
+        if a.alpha then t:SetAlpha(a.alpha + (1 - a.alpha) * (0.5 + 0.5 * s2)) end
+        place(t, sx, sy + bob)
+      else
+        place(t, sx, sy)
+      end
       if tint ~= e.tint then
         e.tint = tint
         if tint == 1 then t:SetVertexColor(1, 0.35, 0.35)
         elseif tint == 2 then t:SetVertexColor(0.55, 0.75, 1)
+        elseif tint == 3 then t:SetVertexColor(0.55, 1, 0.45)
         elseif t.isArt then t:SetVertexColor(1, 1, 1)
         else local f = FALLBACK[e.kind]; t:SetVertexColor(f[2], f[3], f[4]) end
       end
@@ -471,6 +518,22 @@ function R.Draw(S, elapsed)
 
   -- player
   if p.fx < -0.05 then playerTex:SetTexCoord(1, 0, 0, 1) elseif p.fx > 0.05 then playerTex:SetTexCoord(0, 1, 0, 1) end
+  if anim then
+    local a = HERO_WALK
+    if p.moving then
+      heroAt = heroAt + elapsed * a.rate
+      local s1, s2 = sin(heroAt), sin(heroAt * 2)
+      playerTex:SetSize(52 * (1 + a.sq * s2), 52 * (1 - a.sq * s2))
+      playerTex:SetRotation(a.rot * s1 * (p.fx < 0 and -1 or 1))
+      playerTex:SetPoint("CENTER", world, "BOTTOMLEFT", W / 2, H / 2 + abs(s1) * a.bob)
+    else -- idle: slow breathing
+      heroAt = heroAt + elapsed * 2.5
+      local s = sin(heroAt)
+      playerTex:SetSize(52 * (1 - 0.02 * s), 52 * (1 + 0.025 * s))
+      playerTex:SetRotation(0)
+      playerTex:SetPoint("CENTER", world, "BOTTOMLEFT", W / 2, H / 2 + 1 + s)
+    end
+  end
   playerTex:SetAlpha(p.iframes > 0 and (floor(now * 20) % 2 == 0 and 0.4 or 1) or 1)
   playerHp:SetMinMaxValues(0, p.maxhp)
   playerHp:SetValue(p.hp)

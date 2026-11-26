@@ -17,7 +17,7 @@ Built for WoW: Forever (interface 16001, a retail-based client). It uses only pl
 
 On the game-over screen `SPACE` replays the same class and `C` returns to class select.
 
-Other commands: `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (stress test with 600 enemies, invulnerable), `/azs numbers` (damage numbers on/off), `/azs scale 0.8`, `/azs reset` (window position).
+Other commands: `/azs anim` (movement animations on/off), `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (stress test with 600 enemies, invulnerable), `/azs numbers` (damage numbers on/off), `/azs scale 0.8`, `/azs reset` (window position).
 
 ## Classes (0.2.0)
 

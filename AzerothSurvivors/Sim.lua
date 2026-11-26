@@ -14,7 +14,7 @@ local MAX_R = 40 -- largest enemy radius (boss); grid queries widen by this
 local function noop() end
 local NOHOOKS = { release = noop, number = noop, fx = noop, levelup = noop, hurt = noop, kill = noop, over = noop, pickup = noop, heal = noop }
 
-function Sim.HpScale(t) return 1 + t / 200 + (t / 400) ^ 2 end
+function Sim.HpScale(t) return 1 + t / 300 + (t / 550) ^ 2 end
 
 ---------------------------------------------------------------------------
 -- setup
