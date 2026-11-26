@@ -1,0 +1,15 @@
+# name|seed|kind|subject
+# kind: sprite = shared STYLE + white background; glow = STYLE_GLOW (black bg); tile = ground texture
+# Each line generates 4 candidates with seeds seed..seed+3 (SwarmUI increments the seed per image).
+ghoul|1101|sprite|a hunched green-grey undead ghoul with long sharp claws, ragged loincloth, exposed ribs, snarling, crouched pose
+bat|1201|sprite|a vampire bat with wings spread wide, purple-brown leathery wings, glowing red eyes, fangs, seen from above
+wraith|1301|sprite|a spectral wraith, pale blue glowing ghost with a tattered hood and flowing robes fading into wisps, long ghostly hands, glowing white eyes, translucent-looking cold blue colours
+brute|1401|sprite|a hulking stitched abomination brute, bloated pale green flesh with crude stitches, huge arms, rusty meat hook, chains, undead flesh golem
+elite|1501|sprite|an armored death knight champion in dark saronite plate armor with skull pauldrons, glowing icy blue eyes, holding a large glowing blue runeblade, tattered dark cape
+boss|1601|sprite|a powerful lich king, towering undead sorcerer in ornate spiked frost armor with a tall jagged icy crown, glowing blue eyes, holding a frost runesword, icy blue and steel colours, menacing
+hero|1701|sprite|a heroic human paladin adventurer in gold and blue plate armor, blue cape, holding a warhammer and round shield, bright gold trim, heroic stance
+gem|1801|sprite|a single faceted experience crystal gem, pale light cyan-blue, elongated diamond shape, simple bright facets, light and slightly desaturated
+potion|1901|sprite|a single round glass health potion flask filled with bright red liquid, cork stopper, small highlight, simple shape
+bolt|2011|glow|a single round spherical arcane missile orb of bright magenta and violet energy with a hot white glowing core, swirling arcane energy and a soft round radiating pink-violet glow, compact ball shape
+orb|2101|glow|a single glowing golden holy light sphere with a hot white-yellow core and soft radiating golden glow, faint light rays
+ground|2201|tile|seamless tileable top-down texture of dark cursed earth in the Eastern Plaguelands, dry dead grey-brown grass tufts, scattered broken cobblestones, dark soil, muted desaturated dark colours, low contrast, even flat lighting, no objects, no shadows, flat orthographic top-down view filling the whole frame edge to edge

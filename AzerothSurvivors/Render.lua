@@ -117,13 +117,13 @@ function R.Init(parent, w, h)
   end)
 
   playerTex = world:CreateTexture(nil, "ARTWORK", nil, 5)
-  playerTex:SetSize(40, 40)
+  playerTex:SetSize(52, 52)
   playerTex:SetPoint("CENTER", world, "BOTTOMLEFT", W / 2, H / 2)
   if not art(playerTex, "hero") then SetPortraitTexture(playerTex, "player") end
 
   playerHp = CreateFrame("StatusBar", nil, world)
   playerHp:SetSize(40, 4)
-  playerHp:SetPoint("TOP", playerTex, "BOTTOM", 0, -2)
+  playerHp:SetPoint("TOP", playerTex, "BOTTOM", 0, 4)
   playerHp:SetStatusBarTexture(WHITE)
   playerHp:SetStatusBarColor(0.9, 0.15, 0.15)
   local hb = playerHp:CreateTexture(nil, "BACKGROUND")
@@ -276,11 +276,11 @@ function R.Draw(S, elapsed)
 
   -- enemies
   local E = S.enemies
-  local Wm, Hm = W + 70, H + 70
   for i = 1, S.nE do
     local e = E[i]
     local sx, sy = e.x + ox, e.y + oy
-    if sx > -70 and sx < Wm and sy > -70 and sy < Hm then
+    local m = e.def.size * 0.5 + 4
+    if sx > -m and sx < W + m and sy > -m and sy < H + m then
       local t = e.tex
       if not t then
         t = acquire(pools[e.kind]); e.tex = t; e.vis = true; e.tint = nil; e.tface = nil

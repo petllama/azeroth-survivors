@@ -11,12 +11,12 @@ C.PASSIVE_SLOTS = 5
 
 -- hp/dmg are base values; hp scales with time (see Sim.HpScale)
 C.ENEMIES = {
-  ghoul  = { hp = 9,    speed = 52, r = 11, dmg = 6,  xp = 1,   size = 30 },
-  bat    = { hp = 5,    speed = 92, r = 8,  dmg = 4,  xp = 1,   size = 26 },
-  wraith = { hp = 22,   speed = 66, r = 12, dmg = 9,  xp = 2,   size = 34 },
-  brute  = { hp = 70,   speed = 38, r = 19, dmg = 14, xp = 5,   size = 52 },
-  elite  = { hp = 450,  speed = 48, r = 24, dmg = 22, xp = 30,  size = 68, elite = true, drop = "potion" },
-  boss   = { hp = 9000, speed = 44, r = 40, dmg = 35, xp = 300, size = 120, boss = true, name = "The Frost Lich" },
+  ghoul  = { hp = 9,    speed = 52, r = 11, dmg = 6,  xp = 1,   size = 42 },
+  bat    = { hp = 5,    speed = 92, r = 8,  dmg = 4,  xp = 1,   size = 34 },
+  wraith = { hp = 22,   speed = 66, r = 12, dmg = 9,  xp = 2,   size = 44 },
+  brute  = { hp = 70,   speed = 38, r = 19, dmg = 14, xp = 5,   size = 66 },
+  elite  = { hp = 450,  speed = 48, r = 24, dmg = 22, xp = 30,  size = 88, elite = true, drop = "potion" },
+  boss   = { hp = 9000, speed = 44, r = 40, dmg = 35, xp = 300, size = 160, boss = true, name = "The Frost Lich" },
 }
 
 -- spawn weights by time (seconds): first matching row from the bottom whose t <= now
