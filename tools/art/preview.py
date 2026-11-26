@@ -30,6 +30,14 @@ items = [
     ("potion", 24, 470, 560, False),
     ("bolt", 16, 430, 350, True), ("bolt", 16, 470, 330, True), ("bolt", 20, 300, 360, True),
     ("orb", 48, 330, 300, True), ("orb", 40, 420, 470, True),
+    # class update: rogue + druid heroes and their weapons
+    ("hero_rogue", 48, 120, 110, False), ("hero_druid", 48, 660, 110, False),
+    ("knife", 24, 170, 110, False), ("knife", 24, 200, 140, False),
+    ("shuriken", 20, 90, 170, False), ("shuriken", 20, 150, 180, False),
+    ("hammer", 24, 430, 400, False), ("shield", 32, 384, 330, False),
+    ("wrath", 20, 610, 120, True), ("wrath", 20, 600, 170, True),
+    ("star", 40, 700, 220, True), ("star", 32, 640, 260, True),
+    ("slash", 64, 250, 110, True),
 ]
 for name, px, cx, cy, add in items:
     s = load(name).resize((px, px), Image.LANCZOS)
@@ -46,7 +54,8 @@ canvas.save(os.path.join(HERE, "out", "preview.png"))
 canvas.resize((1536, 1536), Image.NEAREST).save(os.path.join(HERE, "out", "preview_2x.png"))
 
 # native-size strip of every sprite on the ground, 4x nearest for inspection
-names = ["hero", "ghoul", "bat", "wraith", "brute", "elite", "boss", "gem", "potion", "bolt", "orb"]
+names = ["hero", "hero_rogue", "hero_druid", "ghoul", "bat", "wraith", "brute", "elite", "boss", "gem", "potion",
+         "bolt", "orb", "knife", "shuriken", "hammer", "shield", "wrath", "star", "slash"]
 W = sum(load(n).width + 8 for n in names)
 strip = Image.new("RGBA", (W, 264))
 for x in range(0, W, 256):

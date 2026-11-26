@@ -138,7 +138,7 @@ C.WEAPONS = {
   fan = {
     type = "burst", name = "Fan of Knives", icon = "Interface\\Icons\\Ability_Rogue_FanOfKnives",
     desc = "Throws knives in every direction.", sprite = "knife", color = { 0.85, 0.85, 0.9 },
-    base = { dmg = 8, cd = 2.0, count = 8, speed = 400, pierce = 1, life = 0.55, size = 20 },
+    base = { dmg = 8, cd = 2.0, count = 8, speed = 400, pierce = 1, life = 0.55, size = 26 },
     levels = {
       [2] = { count = 4, text = "+4 knives" },
       [3] = { dmg = 4, text = "+4 damage" },
@@ -163,7 +163,7 @@ C.WEAPONS = {
   flurry = {
     type = "orbit", name = "Blade Flurry", icon = "Interface\\Icons\\Ability_Warrior_PunishingBlow",
     desc = "Blades whirl tightly around you.", sprite = "knife", spinSprite = true, color = { 0.9, 0.9, 1 },
-    base = { dmg = 6, count = 2, radius = 46, spin = 7.0, hitcd = 0.3, size = 22 },
+    base = { dmg = 6, count = 2, radius = 46, spin = 7.0, hitcd = 0.3, size = 26 },
     levels = {
       [2] = { count = 1, text = "+1 blade" },
       [3] = { dmg = 3, text = "+3 damage" },

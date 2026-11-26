@@ -7,6 +7,7 @@ Sprites in `AzerothSurvivors/Art/*.tga` are generated with the local image model
     tools/art/gen.sh [name...]      # 4 candidates per line of prompts.txt -> out/raw/<name>_<seed>.png
     uv run tools/art/contact.py ghoul bat    # contact sheet -> out/sheet_*.png
     uv run tools/art/process.py [name...]   # picked seed -> Art/<name>.tga (verifies TGA header)
+    uv run tools/art/slash_proc.py          # procedural slash.tga source (no model)
     uv run tools/art/preview.py             # out/preview.png, out/ground_3x3.png, out/native_strip.png
     systemctl --user stop swarmui flux3-pup
 
@@ -39,8 +40,19 @@ Sprites in `AzerothSurvivors/Art/*.tga` are generated with the local image model
 | bolt.tga | 32 | 2013 | glow | second prompt ("round spherical"); seeds 2001-2004 were eye-shaped |
 | orb.tga | 64 | 2101 | glow | |
 | ground.tga | 256 | 2204 | tile | central 5/8 crop, half-offset blend -> seamless, contrast x0.7, brightness x0.72 |
+| hero_rogue.tga | 64 | 2302 | sprite | brightness x1.3 (dark purple/black leather vanishes on the ground otherwise) |
+| hero_druid.tga | 64 | 2403 | sprite | tall/thin silhouette (antlers + staff) so the body is narrower than hero.tga |
+| knife.tga | 32 | 2501 | sprite | blade points right (+x); long thin object -> only ~5 px tall at 32; brightness x1.3 |
+| shuriken.tga | 32 | 2604 | sprite | brightness x1.6 (dark steel on dark ground) |
+| hammer.tga | 32 | 2702 | sprite | head up; thin handle is small at 32 |
+| shield.tga | 64 | 2811 | sprite | second prompt ("perfectly circular buckler"); seeds 2801-2804 were heater shields. tol 110 so the pale glow halo is cut instead of leaving a cream ring (glow therefore not baked in) |
+| wrath.tga | 32 | 2901 | glow | green rim, yellow-white core |
+| star.tga | 64 | 3004 | glow | tail points up, head at the bottom of the (centred) square, not at its centre |
+| slash.tga | 128 | proc | glow | procedural (`uv run tools/art/slash_proc.py` -> out/raw/slash_proc.png): model seeds 3101-3104 gave flat elliptical swooshes, not a right-bulging crescent. Thick edge on the right, horns tapering top-left/bottom-left |
 
 ## Processing (process.py)
+
+Per-sprite knobs in process.py: `BOOST` (brightness x, saturation x1.25) and `TOL` (near-white cutout tolerance, default 30).
 
 - sprite: flood-fill near-white (tol 30) from the border -> background; enclosed flat pure-white holes
   (>40 px, mean min channel > 240) also background; drop specks < 2% of the main body; erode 2 px, 1 px

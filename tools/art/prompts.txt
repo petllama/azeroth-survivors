@@ -13,3 +13,12 @@ potion|1901|sprite|a single round glass health potion flask filled with bright r
 bolt|2011|glow|a single round spherical arcane missile orb of bright magenta and violet energy with a hot white glowing core, swirling arcane energy and a soft round radiating pink-violet glow, compact ball shape
 orb|2101|glow|a single glowing golden holy light sphere with a hot white-yellow core and soft radiating golden glow, faint light rays
 ground|2201|tile|seamless tileable top-down texture of dark cursed earth in the Eastern Plaguelands, dry dead grey-brown grass tufts, scattered broken cobblestones, dark soil, muted desaturated dark colours, low contrast, even flat lighting, no objects, no shadows, flat orthographic top-down view filling the whole frame edge to edge
+hero_rogue|2301|sprite|a hooded human rogue assassin in dark purple and black leather armor, hood and face mask, holding a dagger in each hand, belt pouches, crouched ready stance
+hero_druid|2401|sprite|a night elf druid with purple skin, long pointed ears and a wooden antlered headdress, flowing green and brown leaf-trimmed robes, holding a gnarled wooden staff, heroic stance
+knife|2501|sprite|a single thrown dagger lying horizontal, seen from the side, the steel blade pointing to the right and the dark leather-wrapped hilt on the left, simple shape
+shuriken|2601|sprite|a single four-pointed steel throwing star shuriken seen straight from above, symmetrical four sharp points, round hole in the centre, simple shape
+hammer|2701|sprite|a single glowing golden holy war hammer standing upright, the heavy hammer head at the top and the handle pointing down, ornate gold with a soft holy yellow glow, simple shape
+shield|2811|sprite|a single perfectly circular round buckler shield seen straight from the front, a flat disc shape, polished gold face with an ornate gold rim and a radiant holy light sunburst emblem in the centre, soft holy golden glow around it, simple shape
+wrath|2901|glow|a single round spherical ball of nature magic, bright yellow-green glowing energy with a hot white core and a soft radiating green glow, compact ball shape
+star|3001|glow|a single falling star meteor, a bright white and violet star at the bottom with a short glowing violet tail trailing straight upward above it, vertical, moving downward
+slash|3101|glow|a single thin white crescent shaped sword swing arc, a curved swoosh slash trail like a crescent moon, the arc bulging toward the right side, bright white glow with faint blue edge

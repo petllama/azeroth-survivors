@@ -34,8 +34,18 @@ PICKS = {
     "bolt":   (2013, 32, "glow"),
     "orb":    (2101, 64, "glow"),
     "ground": (2204, 256, "tile"),
+    "hero_rogue": (2302, 64, "sprite"),
+    "hero_druid": (2403, 64, "sprite"),
+    "knife":    (2501, 32, "sprite"),
+    "shuriken": (2604, 32, "sprite"),
+    "hammer":   (2702, 32, "sprite"),
+    "shield":   (2811, 64, "sprite"),
+    "wrath":    (2901, 32, "glow"),
+    "star":     (3004, 64, "glow"),
+    "slash":    ("proc", 128, "glow"),  # procedural: uv run tools/art/slash_proc.py -> out/raw/slash_proc.png
 }
-BOOST = {"bat": 1.5}  # brightness multiplier per sprite
+BOOST = {"bat": 1.5, "hero_rogue": 1.3, "shuriken": 1.6, "knife": 1.3}  # brightness multiplier per sprite
+TOL = {"shield": 110}  # wider near-white tolerance: eats the pale glow halo that would leave a cream ring
 MARGIN = 0.04  # fraction of final size left empty on each side
 
 
@@ -136,7 +146,7 @@ def main():
         seed, size, kind = PICKS[n]
         src = os.path.join(RAW, f"{n}_{seed}.png")
         if kind == "sprite":
-            im = sprite(src, size, boost=BOOST.get(n, 1.0))
+            im = sprite(src, size, tol=TOL.get(n, 30), boost=BOOST.get(n, 1.0))
         else:
             im = {"glow": glow, "tile": tile}[kind](src, size)
         im.save(os.path.join(HERE, "out", f"final_{n}.png"))
