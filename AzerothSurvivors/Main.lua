@@ -105,6 +105,8 @@ local hooks = {
   over = function(s, won)
     mode = "over"
     local db = ns.db
+    -- the run is over: its quick save goes too (a save of another run stays; old saves have no id)
+    if db.save and (db.save.runId == nil or db.save.runId == s.runId) then db.save = nil end
     local res = { gold = 0 }
     if not s.stress then
       db.runs = (db.runs or 0) + 1
@@ -203,6 +205,7 @@ local function startRun()
     meta = not stress and ns.db.meta or nil, curses = not stress and ns.db.curses or nil,
     unlocks = not stress and C.UnlockBonus(ns.db.ach) or nil })
   S.achT = 0
+  S.runId = string.format("%d-%d", time and time() or 0, math.random(1, 999999))
   R.SetClass(C.CLASSES[cls])
   R.SetZone(S.zone)
   UI.HideBoss()

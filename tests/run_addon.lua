@@ -554,6 +554,30 @@ do
   key("P", true); assert(select(2, ns.State()) == "pause", "P should pause")
   key("P", true)
   print(string.format("save/load ok: saved at t=%.1f level %d", savedT, savedLevel))
+  -- a run that ends takes its quick save with it; a save of another run stays
+  local function quit()
+    if select(2, ns.State()) == "levelup" then key("1", true) end
+    if select(2, ns.State()) == "play" then key("P", true) end
+    assert(select(2, ns.State()) == "pause", "should be paused to quit")
+    key("Q", true)
+    assert(select(2, ns.State()) == "over", "Q should end the run")
+  end
+  key("F6", true)
+  assert(ns.db.save and ns.db.save.runId == ns.State().runId, "save should carry the run id")
+  quit()
+  assert(ns.db.save == nil, "the ended run's save should be removed")
+  key("SPACE", true)
+  for _ = 1, 60 do tick(dt) end
+  key("F6", true)
+  ns.db.save.runId = "another-run"
+  quit()
+  assert(ns.db.save and ns.db.save.runId == "another-run", "another run's save should stay")
+  ns.db.save.runId = nil -- an old save without an id goes with the next run that ends
+  key("SPACE", true)
+  quit()
+  assert(ns.db.save == nil, "an old save without id should be removed when a run ends")
+  key("SPACE", true)
+  print("save cleanup ok: death/quit removes the run's save, other run's save stays")
 end
 
 -- flight: pick a destination, board, get the card, play, landing guard, land, learned time

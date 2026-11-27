@@ -1630,6 +1630,7 @@ function Sim.Serialize(S)
     for i, c in ipairs(S.choices) do d.choices[i] = { c.kind, c.id, c.level } end
   end
   d.zone, d.ev = S.zone, { S.ev.ring, S.ev.goblin, S.ev.brazier }
+  d.runId = S.runId
   return d
 end
 
@@ -1698,5 +1699,6 @@ function Sim.Deserialize(d, opts)
     S.choices = {}
     for i, c in ipairs(d.choices) do S.choices[i] = { kind = c[1], id = c[2], level = c[3] } end
   end
+  S.runId = d.runId
   return S
 end
