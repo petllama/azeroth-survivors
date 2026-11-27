@@ -43,9 +43,41 @@ PICKS = {
     "wrath":    (2901, 32, "glow"),
     "star":     (3004, 64, "glow"),
     "slash":    ("proc", 128, "glow"),  # procedural: uv run tools/art/slash_proc.py -> out/raw/slash_proc.png
+    # 0.5 set
+    "hero_mage":    (4001, 64, "sprite"),
+    "hero_warlock": (4101, 64, "sprite"),
+    "hero_hunter":  (4204, 64, "sprite"),
+    "frostbolt":  (4301, 32, "glow"),
+    "fireball":   (4403, 32, "glow"),
+    "arcane":     (4503, 32, "glow"),
+    "shadowbolt": (4604, 32, "glow"),
+    "enemybolt":  (4702, 32, "glow"),
+    "blizzard":   (4804, 64, "glow"),
+    "felfire":    (4901, 64, "glow"),
+    "arrow":   (5003, 32, "sprite"),
+    "coin":    (5101, 32, "sprite"),
+    "magnet":  (5201, 32, "sprite"),
+    "chicken": (5302, 32, "sprite"),
+    "bomb":    (5403, 32, "sprite"),
+    "imp":     (5502, 64, "sprite"),
+    "wolf":    (5601, 64, "sprite"),
+    "trap":    (5704, 64, "sprite"),
+    "caster":  (5802, 64, "sprite"),
+    "charger": (6801, 64, "sprite"),  # second prompt (upright worgen); 5901-5904 looked like the wolf pet
+    "ooze":    (6001, 64, "sprite"),
+    "goblin":  (6102, 64, "sprite"),
+    "chest":   (6202, 64, "sprite"),
+    "brazier": (6302, 64, "sprite"),
+    "ground_tirisfal": (6401, 256, "tile"),
+    "ground_barrens":  (6502, 256, "tile"),
+    "ground_elwynn":   (6602, 256, "tile"),
+    "ground_snow":     (6701, 256, "tile"),  # 6704 had straight horizontal drift streaks that show when tiled
 }
-BOOST = {"bat": 1.5, "hero_rogue": 1.3, "shuriken": 1.6, "knife": 1.3}  # brightness multiplier per sprite
+BOOST = {"bat": 1.5, "hero_rogue": 1.3, "shuriken": 1.6, "knife": 1.3,
+         "hero_warlock": 1.3, "hero_hunter": 1.2, "bomb": 1.5, "caster": 1.3, "charger": 1.3}  # brightness multiplier per sprite
 TOL = {"shield": 110}  # wider near-white tolerance: eats the pale glow halo that would leave a cream ring
+DARK = {"ground_barrens": 0.6, "ground_snow": 0.6}  # per-tile brightness multiplier (default 0.72 like ground.tga)
+TSAT = {"ground_barrens": 0.7}  # per-tile saturation multiplier (default 1)
 MARGIN = 0.04  # fraction of final size left empty on each side
 
 
@@ -109,24 +141,39 @@ def glow(src, size):
     return square_resize(im, size, margin=0.02)
 
 
-def tile(src, size):
+def tile(src, size, dark=0.72, sat=1.0, legacy=False):
     img = Image.open(src).convert("RGB")
     s = img.width * 3 // 16  # use the central 5/8 so features stay readable at 256
     img = img.crop((s, s, img.width - s, img.height - s))
     img = img.resize((512, 512), Image.LANCZOS)
     a = np.asarray(img).astype(np.float32)
     n = a.shape[0]
-    b = np.roll(a, (n // 2, n // 2), axis=(0, 1))
     t = np.abs(np.linspace(-1, 1, n))  # 1 at edges, 0 centre
-    edge = np.maximum.outer(t, t)  # how close to any edge
-    wB = np.clip((edge - 0.55) / 0.35, 0, 1)[..., None]  # use offset copy near edges
-    m = a * (1 - wB) + b * wB
+    if legacy:  # ground.tga: 2D blend; leaves a faint cross seam (offset copy's seam shows near the edges)
+        b = np.roll(a, (n // 2, n // 2), axis=(0, 1))
+        edge = np.maximum.outer(t, t)  # how close to any edge
+        wB = np.clip((edge - 0.55) / 0.35, 0, 1)[..., None]  # use offset copy near edges
+        m = a * (1 - wB) + b * wB
+    else:  # separable: blend columns, then rows; each offset copy's seam sits where its weight is 0
+        w = np.clip((t - 0.55) / 0.35, 0, 1)
+        m = a * (1 - w[None, :, None]) + np.roll(a, n // 2, axis=1) * w[None, :, None]
+        m = m * (1 - w[:, None, None]) + np.roll(m, n // 2, axis=0) * w[:, None, None]
     # darken and reduce contrast so sprites read on top
     mean = m.mean(axis=(0, 1), keepdims=True)
     m = (m - mean) * 0.7 + mean
-    m = m * 0.72
-    im = Image.fromarray(np.clip(m, 0, 255).astype(np.uint8), "RGB").resize((size, size), Image.LANCZOS)
-    return im.convert("RGBA")
+    m = m * dark
+    if sat != 1.0:
+        grey = m.mean(axis=2, keepdims=True)
+        m = grey + (m - grey) * sat
+    im = Image.fromarray(np.clip(m, 0, 255).astype(np.uint8), "RGB")
+    if legacy:
+        return im.resize((size, size), Image.LANCZOS).convert("RGBA")
+    big = Image.new("RGB", (3 * n, 3 * n))  # resize a wrapped 3x3 copy so the filter wraps too
+    for y in range(3):
+        for x in range(3):
+            big.paste(im, (x * n, y * n))
+    big = big.resize((3 * size, 3 * size), Image.LANCZOS)
+    return big.crop((size, size, 2 * size, 2 * size)).convert("RGBA")
 
 
 def save_tga(im, path):
@@ -147,8 +194,10 @@ def main():
         src = os.path.join(RAW, f"{n}_{seed}.png")
         if kind == "sprite":
             im = sprite(src, size, tol=TOL.get(n, 30), boost=BOOST.get(n, 1.0))
+        elif kind == "tile":
+            im = tile(src, size, dark=DARK.get(n, 0.72), sat=TSAT.get(n, 1.0), legacy=(n == "ground"))
         else:
-            im = {"glow": glow, "tile": tile}[kind](src, size)
+            im = glow(src, size)
         im.save(os.path.join(HERE, "out", f"final_{n}.png"))
         save_tga(im, os.path.join(ART, f"{n}.tga"))
 

@@ -9,6 +9,7 @@ Sprites in `AzerothSurvivors/Art/*.tga` are generated with the local image model
     uv run tools/art/process.py [name...]   # picked seed -> Art/<name>.tga (verifies TGA header)
     uv run tools/art/slash_proc.py          # procedural slash.tga source (no model)
     uv run tools/art/preview.py             # out/preview.png, out/ground_3x3.png, out/native_strip.png
+    uv run tools/art/preview05.py           # 0.5 set: out/native_strip_05(_2x).png on all 5 grounds, out/ground_<zone>_3x3.png
     systemctl --user stop swarmui flux3-pup
 
 `out/` is git-ignored. Seeds are deterministic: candidate `<name>_<seed>` came from `--seed <first> -n 4`
@@ -49,6 +50,34 @@ Sprites in `AzerothSurvivors/Art/*.tga` are generated with the local image model
 | wrath.tga | 32 | 2901 | glow | green rim, yellow-white core |
 | star.tga | 64 | 3004 | glow | tail points up, head at the bottom of the (centred) square, not at its centre |
 | slash.tga | 128 | proc | glow | procedural (`uv run tools/art/slash_proc.py` -> out/raw/slash_proc.png): model seeds 3101-3104 gave flat elliptical swooshes, not a right-bulging crescent. Thick edge on the right, horns tapering top-left/bottom-left |
+| hero_mage.tga | 64 | 4001 | sprite | detached arcane wisps beside the hands kept |
+| hero_warlock.tga | 64 | 4101 | sprite | brightness x1.3 (dark purple robes) |
+| hero_hunter.tga | 64 | 4204 | sprite | brightness x1.2; horizontal bow makes it wide, so the body is a bit smaller than hero.tga |
+| frostbolt.tga | 32 | 4301 | glow | pale; low contrast on ground_snow (additive on a light floor) |
+| fireball.tga | 32 | 4403 | glow | |
+| arcane.tga | 32 | 4503 | glow | pink with pale blue streaks (distinct from shadowbolt) |
+| shadowbolt.tga | 32 | 4604 | glow | violet swirl |
+| enemybolt.tga | 32 | 4702 | glow | purple-red |
+| blizzard.tga | 64 | 4804 | glow | ring of ice shards, empty centre; low contrast on ground_snow |
+| felfire.tga | 64 | 4901 | glow | |
+| arrow.tga | 32 | 5003 | sprite | head points right (+x); only ~5 px tall at 32 like knife |
+| coin.tga | 32 | 5101 | sprite | |
+| magnet.tga | 32 | 5201 | sprite | |
+| chicken.tga | 32 | 5302 | sprite | |
+| bomb.tga | 32 | 5403 | sprite | brightness x1.5 (black bomb) |
+| imp.tga | 64 | 5502 | sprite | |
+| wolf.tga | 64 | 5601 | sprite | faces left |
+| trap.tga | 64 | 5704 | sprite | |
+| caster.tga | 64 | 5802 | sprite | brightness x1.3 |
+| charger.tga | 64 | 6801 | sprite | second prompt (upright worgen); seeds 5901-5904 were four-legged and looked like the wolf pet. brightness x1.3 |
+| ooze.tga | 64 | 6001 | sprite | |
+| goblin.tga | 64 | 6102 | sprite | |
+| chest.tga | 64 | 6202 | sprite | |
+| brazier.tga | 64 | 6302 | sprite | |
+| ground_tirisfal.tga | 256 | 6401 | tile | like ground.tga but separable seam blend (see below) |
+| ground_barrens.tga | 256 | 6502 | tile | brightness x0.6, saturation x0.7 (raw is bright orange) |
+| ground_elwynn.tga | 256 | 6602 | tile | |
+| ground_snow.tga | 256 | 6701 | tile | brightness x0.6; 6704 had straight drift streaks that showed when tiled. Lightest floor: white glows (frostbolt, blizzard) read weakly on it |
 
 ## Processing (process.py)
 
@@ -59,4 +88,8 @@ Per-sprite knobs in process.py: `BOOST` (brightness x, saturation x1.25) and `TO
   Gaussian feather; trim, pad to square with 4% margin, Lanczos resize (premultiplied); light unsharp mask at <= 64 px.
 - glow: alpha = max(r,g,b) (black floor crushed, radial fade to 0 at the frame edge), colour un-premultiplied,
   so it looks the same with `SetBlendMode("ADD")` and normal `BLEND`.
+- tile (0.5 grounds): blend with a column-offset copy, then a row-offset copy (separable), so each copy's own seam sits
+  where its weight is 0; the 2D blend used for ground.tga (kept as `legacy` so it reproduces byte-identical) leaves a
+  faint cross seam at the tile centre/edges. The 512 px tile is resized as a wrapped 3x3 so Lanczos wraps too.
+  Per-tile `DARK` (brightness, default 0.72) and `TSAT` (saturation) knobs.
 - All outputs: 32-bit uncompressed TGA (type 2, 32 bpp, 8 alpha bits, bottom-left origin), power-of-two square.

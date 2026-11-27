@@ -22,3 +22,33 @@ shield|2811|sprite|a single perfectly circular round buckler shield seen straigh
 wrath|2901|glow|a single round spherical ball of nature magic, bright yellow-green glowing energy with a hot white core and a soft radiating green glow, compact ball shape
 star|3001|glow|a single falling star meteor, a bright white and violet star at the bottom with a short glowing violet tail trailing straight upward above it, vertical, moving downward
 slash|3101|glow|a single thin white crescent shaped sword swing arc, a curved swoosh slash trail like a crescent moon, the arc bulging toward the right side, bright white glow with faint blue edge
+# 0.5 set (seed blocks 4001+, +100 per key)
+hero_mage|4001|sprite|a human mage in flowing light blue and white arcane robes with silver trim, tall pointed hood, holding a glowing crystal-topped staff, swirling pale blue arcane light in the other hand, heroic stance
+hero_warlock|4101|sprite|a human warlock in dark purple and black robes with spiked shoulder pads and skull ornaments, glowing fel green eyes, holding a staff with green fel fire, bright fel green trim, heroic stance
+hero_hunter|4201|sprite|a human hunter in green and brown leather and mail armor with a hood and quiver of arrows on the back, holding a large wooden longbow, heroic stance
+frostbolt|4301|glow|a single round spherical frost bolt, icy pale blue and white crystalline energy ball with a hot white core and a soft radiating cold blue glow, small ice shards, compact ball shape
+fireball|4401|glow|a single round spherical fireball, bright orange and yellow flames with a hot white-yellow core and a soft radiating orange glow, compact ball shape
+arcane|4501|glow|a single round spherical arcane missile, bright pink-violet and pale blue arcane energy with a hot white core and soft radiating lilac glow, compact ball shape
+shadowbolt|4601|glow|a single round spherical shadow bolt, dark violet and deep purple swirling shadow energy with a bright lilac core and a soft radiating purple glow, compact ball shape
+enemybolt|4701|glow|a single round spherical evil magic bolt, purple and blood red crackling energy with a hot pink-white core and a soft radiating crimson-purple glow, compact ball shape
+blizzard|4801|glow|a single round circular swirling blizzard storm seen from above, many sharp icy blue and white ice shards and snowflakes spinning in a ring, frosty pale blue glow, circular area effect
+felfire|4901|glow|a single round patch of roaring fel fire seen from above, bright toxic green flames with a yellow-green hot core and a soft radiating green glow, circular
+arrow|5001|sprite|a single wooden arrow lying horizontal, seen from the side, the steel arrowhead pointing to the right and the white and red feather fletching on the left, simple shape
+coin|5101|sprite|a single shiny round gold coin seen at a slight angle, embossed lion emblem, bright yellow gold with a white highlight, simple shape
+magnet|5201|sprite|a single red horseshoe magnet with silver tips pointing up, glossy, simple shape
+chicken|5301|sprite|a single roasted chicken drumstick, golden brown crispy skin, white bone end sticking out, simple shape
+bomb|5401|sprite|a single round black goblin bomb with a riveted iron band and a lit sparking fuse on top, bright orange sparks, simple shape
+imp|5501|sprite|a small mischievous warlock imp demon, red skin, little horns, pointy ears, big grin, holding a small green fel fireball in its hand, crouching
+wolf|5601|sprite|a large grey timber wolf hunter pet, snarling, running pose, thick fur, seen from the side and slightly above
+trap|5701|sprite|a hunter's explosive trap on the ground, a round iron mechanical trap plate with glowing orange runes and fire in the centre, seen from above
+caster|5801|sprite|an undead skeleton mage in tattered dark purple robes and hood, skull face with glowing green eyes, bony hands casting purple magic, holding a bone staff
+charger|5901|sprite|a feral worgen werewolf, dark grey-brown fur, glowing yellow eyes, huge claws, charging forward on all fours, snarling
+ooze|6001|sprite|a blob of bright green toxic slime ooze monster, glossy translucent goo with bubbles and a few bones inside, two simple eyes
+goblin|6101|sprite|a greedy green goblin carrying a big bulging sack of gold coins over his shoulder, gold coins spilling, big ears, grinning, running pose
+chest|6201|sprite|a closed wooden treasure chest with gold metal bands, corners and a big lock, seen from a three-quarter top-down angle
+brazier|6301|sprite|an iron brazier on three legs with a bowl of burning orange flames on top, dark iron, bright fire
+ground_tirisfal|6401|tile|seamless tileable top-down texture of the gloomy forest floor of Tirisfal Glades, dark mossy soil, dead grey-purple grass tufts, fallen dead leaves, small pebbles, muted desaturated dark purple-green colours, low contrast, even flat lighting, no objects, no shadows, flat orthographic top-down view filling the whole frame edge to edge
+ground_barrens|6501|tile|seamless tileable top-down texture of the dry savanna of the Barrens, cracked dry orange-tan earth, sparse dry yellow grass tufts, small pebbles, warm muted colours, low contrast, even flat lighting, no objects, no shadows, flat orthographic top-down view filling the whole frame edge to edge
+ground_elwynn|6601|tile|seamless tileable top-down texture of the green forest floor of Elwynn Forest, lush green grass, small clover, a few tiny flowers and fallen leaves, muted green colours, low contrast, even flat lighting, no objects, no shadows, flat orthographic top-down view filling the whole frame edge to edge
+ground_snow|6701|tile|seamless tileable top-down texture of packed snow ground in Dun Morogh, white and pale blue snow with soft drifts, a few small grey rocks poking through, footprint-free, low contrast, even flat lighting, no objects, no shadows, flat orthographic top-down view filling the whole frame edge to edge
+charger|6801|sprite|a feral worgen werewolf standing upright on two legs and lunging forward, hunched humanoid wolf-man, dark brown fur, torn grey trousers, glowing yellow eyes, long sharp claws raised, snarling
