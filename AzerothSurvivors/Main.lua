@@ -52,15 +52,36 @@ local hooks = {
   end,
 }
 
+-- Zone theme (C.ZONES key) for the player's map: exact uiMapID, else name keywords on the map and its parents
+-- (zone -> continent). nil = the default ground and waves.
+function ns.DetectZone()
+  if not (C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo) then return nil end
+  local ok, id = pcall(C_Map.GetBestMapForUnit, "player")
+  if not ok then return nil end
+  for _ = 1, 8 do
+    if not id or id == 0 then return nil end
+    if C.ZONE_MAPS[id] then return C.ZONE_MAPS[id] end
+    local ok2, info = pcall(C_Map.GetMapInfo, id)
+    if not ok2 or type(info) ~= "table" then return nil end
+    local key = C.ZoneForName(info.name)
+    if key then return key end
+    id = info.parentMapID
+  end
+  return nil
+end
+
 local function startRun()
   if S then R.ReleaseAll(S) end
   local cls = C.CLASSES[ns.db.class] and ns.db.class or "paladin"
-  S = Sim.New({ class = cls, viewR = viewR(), hooks = hooks, stress = stressCap and true or nil, cap = stressCap })
+  local zone = ns.DetectZone()
+  S = Sim.New({ class = cls, zone = zone, viewR = viewR(), hooks = hooks, stress = stressCap and true or nil, cap = stressCap })
   R.SetClass(C.CLASSES[cls])
+  R.SetZone(S.zone)
   UI.HideBoss()
   UI.Show(nil)
   mode = "play"
-  if stressCap then UI.Banner("Stress test: " .. stressCap .. " enemies, invulnerable", 0.6, 1, 0.6) end
+  if stressCap then UI.Banner("Stress test: " .. stressCap .. " enemies, invulnerable", 0.6, 1, 0.6)
+  elseif S.zdef then UI.Banner(S.zdef.name, 0.85, 0.8, 0.6) end
 end
 
 local function pause(reason)
@@ -97,6 +118,7 @@ local function loadRun()
   S = S2
   stressCap = nil
   R.SetClass(C.CLASSES[S.class])
+  R.SetZone(S.zone)
   UI.HideBoss()
   if S.state == "levelup" then
     mode = "levelup"

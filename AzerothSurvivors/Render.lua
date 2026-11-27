@@ -15,6 +15,16 @@ local ANIM = {
   brute  = { rate = 4.5, bob = 4,   rot = 0.08, sq = 0.07 },
   elite  = { rate = 6,   bob = 2.5, rot = 0.08, sq = 0.03 },
   boss   = { rate = 2.2, bob = 7,   rot = 0.03, sq = 0.03, hover = true },
+  caster   = { rate = 3,  bob = 4,   rot = 0.05, sq = 0.03, hover = true },
+  charger  = { rate = 9,  bob = 3,   rot = 0.12, sq = 0.05 },
+  ooze     = { rate = 5,  bob = 1,   rot = 0.03, sq = 0.14 },
+  oozelet  = { rate = 8,  bob = 1,   rot = 0.03, sq = 0.14 },
+  skeleton = { rate = 8,  bob = 3,   rot = 0.15, sq = 0.04 },
+  goblin   = { rate = 14, bob = 4,   rot = 0.15, sq = 0.05 },
+  brazier  = { rate = 10, bob = 0,   rot = 0.02, sq = 0.04 },
+  -- pets (drawn from the weapon's pets)
+  imp      = { rate = 5,  bob = 4,   rot = 0.08, sq = 0.04, hover = true },
+  wolf     = { rate = 12, bob = 3,   rot = 0.10, sq = 0.06 },
 }
 local HERO_WALK = { rate = 11, bob = 3.5, rot = 0.1, sq = 0.05 }
 local heroAt = 0
@@ -31,13 +41,28 @@ local FALLBACK = {
   brute  = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_6", 0.6, 1, 0.6 },
   elite  = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_1", 1, 1, 1 },
   boss   = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_3", 0.6, 0.85, 1 },
+  caster   = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_4", 0.85, 0.55, 1 },
+  charger  = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_2", 0.8, 0.7, 0.6 },
+  ooze     = { "Interface\\CharacterFrame\\TempPortraitAlphaMask", 0.4, 1, 0.35 },
+  oozelet  = { "Interface\\CharacterFrame\\TempPortraitAlphaMask", 0.5, 1, 0.45 },
+  skeleton = { "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8", 0.95, 0.95, 1 },
+  goblin   = { "Interface\\Icons\\INV_Misc_Coin_02", 1, 1, 1 },
+  brazier  = { "Interface\\Icons\\Spell_Fire_Fire", 1, 1, 1 },
+}
+-- pickups: art key -> WoW icon fallback, size
+local ITEMS = {
+  coin    = { "Interface\\Icons\\INV_Misc_Coin_01", 16 },
+  magnet  = { "Interface\\Icons\\INV_Misc_Magnet", 24 },
+  chicken = { "Interface\\Icons\\Spell_Magic_PolymorphChicken", 24 },
+  bomb    = { "Interface\\Icons\\INV_Misc_Bomb_05", 24 },
 }
 
 local W, H = 1000, 700
 local frame, world, fxLayer
 local pools = {}
 local playerTex, playerHp, groundTex, flashTex
-local orbTex, auraTex = {}, {} -- per weapon id
+local orbTex, auraTex, petTex = {}, {}, {} -- per weapon id
+local bgTex, bombFlash
 local sprites = {} -- fading fx sprites (slashes, falling stars, shields)
 local lines, rings, numbers = {}, {}, {}
 local gridLines = {}
@@ -90,6 +115,7 @@ function R.Init(parent, w, h)
   local bg = world:CreateTexture(nil, "BACKGROUND", nil, -8)
   bg:SetAllPoints()
   bg:SetColorTexture(0.05, 0.06, 0.05, 1)
+  bgTex = bg
 
   groundTex = world:CreateTexture(nil, "BACKGROUND", nil, -7)
   groundTex:SetAllPoints()
@@ -108,7 +134,7 @@ function R.Init(parent, w, h)
 
   for kind, d in pairs(C.ENEMIES) do
     newPool(kind, "ARTWORK", d.boss and 3 or (d.elite and 2 or 1), function(t)
-      art(t, kind, FALLBACK[kind])
+      art(t, d.art or kind, FALLBACK[kind])
       t:SetSize(d.size, d.size)
     end)
   end
@@ -118,6 +144,20 @@ function R.Init(parent, w, h)
   newPool("potion", "ARTWORK", -1, function(t)
     if not art(t, "potion") then t:SetTexture("Interface\\Icons\\INV_Potion_54") end
     t:SetSize(22, 22)
+  end)
+  for kind, it in pairs(ITEMS) do
+    newPool(kind, "ARTWORK", -1, function(t)
+      if not art(t, kind) then t:SetTexture(it[1]); t:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
+      t:SetSize(it[2], it[2])
+    end)
+  end
+  newPool("enemybolt", "OVERLAY", 2, function(t)
+    if not art(t, "enemybolt") then t:SetTexture(CIRCLE); t:SetVertexColor(1, 0.3, 0.55) end
+    t:SetBlendMode("ADD")
+    t:SetSize(22, 22)
+  end)
+  newPool("trap", "BORDER", 1, function(t)
+    if not art(t, "trap") then t:SetTexture("Interface\\Icons\\Spell_Fire_SelfDestruct"); t:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
   end)
 
   playerTex = world:CreateTexture(nil, "ARTWORK", nil, 5)
@@ -142,10 +182,31 @@ function R.Init(parent, w, h)
   flashTex:SetColorTexture(0.8, 0, 0, 1)
   flashTex:SetAlpha(0)
   flashTex.a = 0
+
+  bombFlash = fxLayer:CreateTexture(nil, "OVERLAY", nil, 6)
+  bombFlash:SetAllPoints()
+  bombFlash:SetColorTexture(1, 0.85, 0.6, 1)
+  bombFlash:SetAlpha(0)
+  bombFlash.a = 0
+end
+
+-- ground art and tint for a zone theme (C.ZONES key or nil); missing zone art falls back to the plain ground
+function R.SetZone(zkey)
+  local z = zkey and C.ZONES[zkey]
+  local c = z and z.tint or { 1, 1, 1 }
+  if groundTex then
+    if not (z and R.USE_ART and groundTex:SetTexture(ART .. z.ground, "REPEAT", "REPEAT")) then
+      groundTex:SetTexture(ART .. "ground", "REPEAT", "REPEAT")
+    end
+    groundTex:SetVertexColor(0.8 * c[1], 0.8 * c[2], 0.8 * c[3])
+  end
+  bgTex:SetColorTexture(0.05 * c[1], 0.06 * c[2], 0.05 * c[3], 1)
+  R.zone = zkey
 end
 
 -- glowing sprites are drawn additive; solid ones (knife, shuriken, hammer, shield) normal
-local GLOW = { wrath = true, star = true, slash = true, bolt = true, orb = true }
+local GLOW = { wrath = true, star = true, slash = true, bolt = true, orb = true,
+  frostbolt = true, fireball = true, arcane = true, blizzard = true, shadowbolt = true, felfire = true, enemybolt = true }
 
 local function projPool(w)
   local d = w.def
@@ -159,6 +220,17 @@ local function projPool(w)
       t:SetBlendMode("ADD")
     end
     t:SetSize(d.base.size or 18, d.base.size or 18)
+  end)
+end
+
+local function zonePool(d)
+  local name = "zone_" .. (d.zoneSprite or "plain")
+  return pools[name] or newPool(name, "BORDER", 0, function(t)
+    if not (d.zoneSprite and art(t, d.zoneSprite)) then
+      t:SetTexture(CIRCLE)
+      t:SetVertexColor(d.color[1], d.color[2], d.color[3])
+    end
+    t:SetBlendMode("ADD")
   end)
 end
 
@@ -265,6 +337,33 @@ function R.Fx(S, kind, a, b, c, d, e)
         fxSprite(w.def.sprite, { 1, 1, 1 }, pts[i], pts[i + 1], pts[i + 2], pts[i + 3], 30, 0, 0.12 + i * 0.03, 0.3)
       end
     end
+  elseif kind == "zonefall" then -- x, y, delay, weapon
+    fxSprite(d.def.zoneSprite or "felfire", d.def.color, a + 40, b + 300, a, b, 36, 0, c, 0.15)
+  elseif kind == "rain" then -- x, y, r, weapon: a few arrows dropping into the area
+    for _ = 1, 2 do
+      local rx, ry = a + (math.random() - 0.5) * c * 1.4, b + (math.random() - 0.5) * c * 1.4
+      fxSprite("arrow", { 1, 1, 1 }, rx + 20, ry + 160, rx, ry, 24, -1.69, 0.22, 0.3)
+    end
+  elseif kind == "curse" or kind == "bite" then -- x, y, 0, weapon
+    ring(a, b, kind == "bite" and 16 or 22, d.def.color, kind == "bite" and 0.18 or 0.3)
+  elseif kind == "drain" or kind == "spread" then -- x1, y1, x2, y2, weapon
+    line(a, b, c, d, e.def.color, kind == "drain" and 3 or 2, kind == "drain" and 0.27 or 0.3)
+  elseif kind == "telegraph" then -- x1, y1, x2, y2, duration: the charger's dash line
+    line(a, b, c, d, { 1, 0.35, 0.15 }, 4, e)
+  elseif kind == "bomb" then -- x, y, r
+    ring(a, b, c, { 1, 0.7, 0.3 }, 0.5)
+    bombFlash.a = 0.45
+  elseif kind == "magnet" then
+    ring(a, b, 90, { 0.4, 0.8, 1 }, 0.4)
+  elseif kind == "ring" then
+    ns.UI.Banner("A ring of skeletons closes in!", 0.9, 0.9, 0.95)
+  elseif kind == "goblin" then
+    ns.UI.Banner("A gold goblin! Catch it before it escapes!", 1, 0.85, 0.2)
+  elseif kind == "goblinGone" then
+    ns.UI.Banner("The goblin got away with its gold.", 0.8, 0.7, 0.4)
+  elseif kind == "goblinKilled" then
+    ns.UI.Banner("Gold!", 1, 0.85, 0.2)
+    ring(a, b, 50, { 1, 0.85, 0.2 }, 0.4)
   elseif kind == "swarm" then
     ns.UI.Banner("A swarm of bats closes in!", 0.9, 0.6, 1)
   elseif kind == "boss" then
@@ -298,7 +397,7 @@ end
 function R.Kill(S, e)
   if not ns.db.anim or e.vis == false then return end
   local d = e.def
-  local t = getSprite(e.kind, { 1, 0.4, 0.4 })
+  local t = getSprite(d.art or e.kind, { 1, 0.4, 0.4 })
   if not t then return end
   t:SetBlendMode("BLEND")
   t.x1, t.y1, t.x2, t.y2, t.size, t.t0, t.dur, t.fade, t.grow = e.x, e.y, e.x, e.y + 10, d.size, now, 0.25, 1, 1.35
@@ -320,6 +419,9 @@ function R.Clear()
   for i = 1, #numbers do numbers[i].on = false; numbers[i]:Hide() end
   for _, list in pairs(orbTex) do for i = 1, #list do list[i]:Hide() end end
   for _, t in pairs(auraTex) do t:Hide() end
+  for _, list in pairs(petTex) do for i = 1, #list do list[i]:Hide() end end
+  bombFlash.a = 0
+  bombFlash:SetAlpha(0)
   for i = 1, #sprites do sprites[i].on = false; sprites[i]:Hide() end
   playerTex:SetTexCoord(0, 1, 0, 1)
   playerTex:SetAlpha(1)
@@ -329,7 +431,7 @@ end
 
 -- Return every texture of a finished run to its pool.
 function R.ReleaseAll(S)
-  for _, list in ipairs({ S.enemies, S.projs, S.gems, S.items }) do
+  for _, list in ipairs({ S.enemies, S.projs, S.gems, S.items, S.ebolts or {}, S.zones or {}, S.traps or {} }) do
     for i = 1, #list do
       local o = list[i]
       if o.tex then R.Release(S, o); o.tex = nil end
@@ -345,8 +447,10 @@ local function place(t, sx, sy)
   t:SetPoint("CENTER", world, "BOTTOMLEFT", sx, sy)
 end
 
+local drawN = 0
 function R.Draw(S, elapsed)
   now = now + elapsed
+  drawN = drawN + 1
   numBudget = 6
   local p = S.p
   local ox, oy = W / 2 - p.x, H / 2 - p.y
@@ -392,7 +496,7 @@ function R.Draw(S, elapsed)
       elseif not e.vis then
         t:Show(); e.vis = true
       end
-      local tint = (e.flash > 0 and 1) or (e.root > 0 and 3) or (e.slow > 0 and 2) or 0
+      local tint = (e.flash > 0 and 1) or (e.aiS == 2 and d.ai == "charge" and 4) or (e.root > 0 and 3) or (e.slow > 0 and 2) or 0
       if anim then
         local a = ANIM[e.kind]
         local rate = a.rate * (e.root > 0 and 0 or (e.slow > 0 and 0.45 or 1))
@@ -417,7 +521,8 @@ function R.Draw(S, elapsed)
         if tint == 1 then t:SetVertexColor(1, 0.35, 0.35)
         elseif tint == 2 then t:SetVertexColor(0.55, 0.75, 1)
         elseif tint == 3 then t:SetVertexColor(0.55, 1, 0.45)
-        elseif t.isArt then t:SetVertexColor(1, 1, 1)
+        elseif tint == 4 then t:SetVertexColor(1, 0.55, 0.2) -- charger about to dash
+        elseif t.isArt then local c = d.tint; t:SetVertexColor(c and c[1] or 1, c and c[2] or 1, c and c[3] or 1)
         else local f = FALLBACK[e.kind]; t:SetVertexColor(f[2], f[3], f[4]) end
       end
       if e.face ~= e.tface then
@@ -471,8 +576,37 @@ function R.Draw(S, elapsed)
       t = acquire(projPool(pr.w)); pr.tex = t
       if not d.spinSprite then t:SetRotation(math.atan2(pr.vy, pr.vx)) end
     end
-    if d.spinSprite then t:SetRotation(now * 14) end
+    if d.spinSprite then t:SetRotation(now * 14) elseif d.homing then t:SetRotation(math.atan2(pr.vy, pr.vx)) end
     place(t, pr.x + ox, pr.y + oy)
+  end
+
+  -- enemy projectiles, ground zones, traps
+  for i = 1, (S.nEB or 0) do
+    local b = S.ebolts[i]
+    local t = b.tex
+    if not t then t = acquire(pools.enemybolt); b.tex = t end
+    t:SetRotation(now * 6)
+    place(t, b.x + ox, b.y + oy)
+  end
+  for i = 1, (S.nZ or 0) do
+    local z = S.zones[i]
+    local d = z.w.def
+    local t = z.tex
+    if not t then t = acquire(zonePool(d)); z.tex = t end
+    t:SetSize(z.r * 2, z.r * 2)
+    if z.delay > 0 then t:SetAlpha(0.15)
+    else t:SetAlpha((d.zoneSprite and 0.75 or 0.3) * min(1, z.t * 2, (z.dur - z.t) * 6 + 0.3)) end
+    if d.zoneSprite then t:SetRotation(now * 0.7) end
+    place(t, z.x + ox, z.y + oy)
+  end
+  for i = 1, (S.nTr or 0) do
+    local tr = S.traps[i]
+    local t = tr.tex
+    if not t then t = acquire(pools.trap); tr.tex = t end
+    local sz = tr.w.size or 34
+    t:SetSize(sz, sz)
+    t:SetAlpha(tr.arm > 0 and 0.45 or (0.8 + 0.2 * sin(now * 6 + i)))
+    place(t, tr.x + ox, tr.y + oy)
   end
 
   -- weapons with persistent visuals
@@ -513,7 +647,43 @@ function R.Draw(S, elapsed)
       t:SetAlpha(0.16 + 0.06 * sin(now * 5))
       place(t, W / 2, H / 2)
       t:Show()
+    elseif d.type == "pet" and w.pets then
+      local list = petTex[w.id]
+      if not list then list = {}; petTex[w.id] = list end
+      list.seen = drawN
+      local a = ANIM[d.petSprite] or HERO_WALK
+      for k = 1, #w.pets do
+        local pet = w.pets[k]
+        local t = list[k]
+        if not t then
+          t = world:CreateTexture(nil, "ARTWORK", nil, 4)
+          if not art(t, d.petSprite) then t:SetTexture(d.icon); t:SetTexCoord(0.08, 0.92, 0.08, 0.92); t.icon = true end
+          t.at = k
+          list[k] = t
+        end
+        local sz = d.petSize or 36
+        local bob = 0
+        if anim then
+          t.at = t.at + elapsed * (pet.moving and a.rate or 2.5)
+          local s1, s2 = sin(t.at), sin(t.at * 2)
+          bob = a.hover and s1 * a.bob or (pet.moving and abs(s1) * a.bob or 0)
+          t:SetSize(sz * (1 + a.sq * s2), sz * (1 - a.sq * s2))
+          t:SetRotation(pet.moving and a.rot * s1 * pet.face or 0)
+        else
+          t:SetSize(sz, sz)
+        end
+        if not t.icon then
+          if pet.face < 0 then t:SetTexCoord(1, 0, 0, 1) else t:SetTexCoord(0, 1, 0, 1) end
+        end
+        place(t, pet.x + ox, pet.y + oy + bob)
+        t:Show()
+      end
+      for k = #w.pets + 1, #list do list[k]:Hide() end
     end
+  end
+
+  for _, list in pairs(petTex) do -- pets of a weapon that is gone (evolved)
+    if list.seen ~= drawN then for k = 1, #list do list[k]:Hide() end end
   end
 
   -- player
@@ -588,6 +758,10 @@ function R.Draw(S, elapsed)
         fs:SetAlpha(1 - f * f)
       end
     end
+  end
+  if bombFlash.a > 0 then
+    bombFlash.a = max(0, bombFlash.a - elapsed * 1.5)
+    bombFlash:SetAlpha(bombFlash.a)
   end
   if flashTex.a > 0 then
     flashTex.a = max(0, flashTex.a - elapsed * 1.2)

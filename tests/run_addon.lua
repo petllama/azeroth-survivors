@@ -71,7 +71,21 @@ function TaxiNodeName(i) return TAXI[i][1] end
 function TaxiNodeGetType(i) return TAXI[i][2] end
 function TaxiNodePosition(i) return TAXI[i][3], TAXI[i][4] end
 function GetTaxiMapID() return 1415 end
-C_Map = { GetMapWorldSize = function() return 30000, 20000 end }
+-- maps: a subzone with no keyword under Tirisfal Glades (parent walk), an unknown cave, an isle on a continent
+local MAPS = {
+  [9001] = { mapID = 9001, name = "Scarlet Watch Post", mapType = 5, parentMapID = 9002 },
+  [9002] = { mapID = 9002, name = "Tirisfal Glades", mapType = 3, parentMapID = 1415 },
+  [1415] = { mapID = 1415, name = "Eastern Kingdoms", mapType = 2, parentMapID = 947 },
+  [947]  = { mapID = 947, name = "Azeroth", mapType = 1, parentMapID = 0 },
+  [9100] = { mapID = 9100, name = "Nowhere Cave", mapType = 4, parentMapID = 0 },
+  [9200] = { mapID = 9200, name = "Some Isle", mapType = 3, parentMapID = 1415 },
+}
+_G.__mapID = 9001
+C_Map = {
+  GetMapWorldSize = function() return 30000, 20000 end,
+  GetBestMapForUnit = function(unit) assert(unit == "player"); return _G.__mapID end,
+  GetMapInfo = function(id) return MAPS[id] end,
+}
 function TakeTaxiNode(i) if hooks_.TakeTaxiNode then hooks_.TakeTaxiNode(i) end end
 RaidWarningFrame = {}
 ChatTypeInfo = { RAID_WARNING = {}, SYSTEM = {} }
@@ -202,7 +216,7 @@ _G.__inCombat = false; fireAll("PLAYER_REGEN_ENABLED")
 key("Q", true); tick(dt)
 key("SPACE", true); for _ = 1, 120 do tick(dt) end
 -- every class: game over -> C -> class key, then play a while with level-ups
-for i, cls in ipairs({ "paladin", "rogue", "druid" }) do
+for i, cls in ipairs(ns.Content.CLASS_ORDER) do
   local S0, m0 = ns.State()
   if m0 == "levelup" then key("1", true) end
   if m0 ~= "over" then key("ESCAPE", true); tick(dt); key("Q", true); tick(dt) end
@@ -226,6 +240,194 @@ for i, cls in ipairs({ "paladin", "rogue", "druid" }) do
   for _, w in ipairs(S2.wlist) do ws[#ws + 1] = w.id .. w.level end
   print(string.format("%s: t=%.0f level=%d kills=%d state=%s  %s", cls, S2.t, S2.p.level, S2.kills, S2.state, table.concat(ws, " ")))
 end
+-- zone themes from the mocked map
+do
+  local S = ns.State()
+  assert(S.zone == "tirisfal" and ns.Render.zone == "tirisfal", "zone theme from the map's parent: " .. tostring(S.zone))
+  _G.__mapID = 9100; assert(ns.DetectZone() == nil, "unknown zone should have no theme")
+  _G.__mapID = 9200; assert(ns.DetectZone() == "elwynn", "continent fallback")
+  _G.__mapID = 1452; assert(ns.DetectZone() == "snow", "exact uiMapID (Winterspring)")
+  _G.__mapID = nil; assert(ns.DetectZone() == nil, "no map")
+  _G.__mapID = 9001
+  print("zones ok: parent walk -> tirisfal, unknown -> none, continent -> elwynn, map id -> snow")
+end
+
+-- content: pets, enemy AI, enemy projectiles, splits, map events and pickups, straight on the sim
+do
+  local Sim, C = ns.Sim, ns.Content
+  local function fresh(cls, weapon)
+    local S = Sim.New({ class = cls, viewR = 600, weapon = weapon, cap = 0 })
+    return S
+  end
+  local function hold(e) e.root = 1e9 end
+  -- pets: the imp shoots, the wolf bites
+  for _, pw in ipairs({ { "warlock", "imp" }, { "hunter", "wolf" } }) do
+    local S = fresh(pw[1], pw[2])
+    local e = Sim.SpawnEnemy(S, "brute", 150, 0, true); hold(e)
+    local hp0 = e.hp
+    for _ = 1, 240 do Sim.Step(S, 1 / 60, 0, 0) end
+    local w = S.weapons[pw[2]]
+    assert(w.pets and #w.pets == 1, pw[2] .. ": no pet")
+    assert(e.hp < hp0 or e.dead, pw[2] .. ": the pet dealt no damage")
+    print(string.format("%s ok: pet at %.0f,%.0f, brute %d -> %d hp", pw[2], w.pets[1].x, w.pets[1].y, hp0, math.max(0, e.hp)))
+  end
+  -- caster: keeps its distance, its bolt hits the player through the normal hit path (armor, iframes)
+  do
+    local S = fresh("mage"); S.wlist = {}; S.weapons = {}
+    local e = Sim.SpawnEnemy(S, "caster", 400, 0, true)
+    local hp0, t = S.p.hp, 0
+    while S.p.hp >= hp0 and t < 10 do Sim.Step(S, 1 / 60, 0, 0); t = t + 1 / 60 end
+    assert(S.p.hp < hp0 and S.lastHit and S.lastHit.kind == "enemybolt", "enemy bolt did not hit the player")
+    assert(S.p.iframes > 0, "a bolt hit gives iframes")
+    local dx = e.x - S.p.x
+    assert(dx > 120 and dx < 300, "caster should keep about 220 px away, at " .. dx)
+    print(string.format("caster ok: bolt hit for %.1f at %.1fs, caster keeps %.0f px", hp0 - S.p.hp, t, dx))
+  end
+  -- charger: telegraphs (stands, line), then dashes
+  do
+    local S = fresh("mage"); S.wlist = {}; S.weapons = {}; S.invuln = true
+    local tele = 0
+    S.hooks.fx = function(_, kind) if kind == "telegraph" then tele = tele + 1 end end
+    local e = Sim.SpawnEnemy(S, "charger", 250, 0, true)
+    local seen, maxSp, lx = {}, 0, e.x
+    for _ = 1, 60 * 6 do
+      Sim.Step(S, 1 / 60, 0, 0)
+      seen[e.aiS] = true
+      maxSp = math.max(maxSp, math.abs(e.x - lx) * 60)
+      if e.x < -50 then e.x = 250 end
+      lx = e.x
+    end
+    assert(tele > 0 and seen[2] and seen[3], "charger never telegraphed and dashed")
+    assert(maxSp > 250, "dash too slow: " .. maxSp)
+    print(string.format("charger ok: %d telegraphs, dash speed %.0f", tele, maxSp))
+  end
+  -- ooze splits into two oozelets
+  do
+    local S = fresh("mage"); S.wlist = {}; S.weapons = {}
+    local e = Sim.SpawnEnemy(S, "ooze", 300, 0, true)
+    Sim.Damage(S, e, 1e6)
+    Sim.Step(S, 1 / 60, 0, 0)
+    local n = 0
+    for i = 1, S.nE do if S.enemies[i].kind == "oozelet" then n = n + 1 end end
+    assert(n == 2, "ooze should split into 2 oozelets, got " .. n)
+    print("ooze ok: split into " .. n)
+  end
+  -- brazier drops a pickup; magnet, chicken, bomb, coin work
+  do
+    local S = fresh("mage"); S.wlist = {}; S.weapons = {}
+    local b = Sim.SpawnEnemy(S, "brazier", 200, 0, true)
+    Sim.Damage(S, b, 1e6)
+    Sim.Step(S, 1 / 60, 0, 0)
+    local kind
+    for i = 1, S.nI do local it = S.items[i]; if C.PICKUPS[it.kind] and it.kind ~= "coin" then kind = it.kind end end
+    assert(kind, "brazier dropped no pickup")
+    S.items, S.nI = {}, 0
+    -- chicken
+    S.p.hp = 10
+    Sim.DropItem(S, "chicken", S.p.x, S.p.y)
+    Sim.Step(S, 1 / 60, 0, 0)
+    assert(math.abs(S.p.hp - (10 + S.p.maxhp * 0.3)) < 1, "chicken should heal 30%: " .. S.p.hp)
+    -- magnet: a far crystal flies in
+    local g = { x = S.p.x + 400, y = S.p.y, xp = 3, pull = false, dead = false }
+    S.nG = S.nG + 1; S.gems[S.nG] = g
+    Sim.DropItem(S, "magnet", S.p.x, S.p.y)
+    Sim.Step(S, 1 / 60, 0, 0)
+    assert(g.pull, "magnet should pull every crystal")
+    local xp0, lv0 = S.p.xp, S.p.level
+    for _ = 1, 90 do Sim.Step(S, 1 / 60, 0, 0) end
+    assert(S.p.xp > xp0 or S.p.level > lv0 or S.state == "levelup", "pulled crystal not collected")
+    S.state = "play"; S.pendingLevels = 0
+    -- bomb: everything on screen takes damage
+    local e1, e2 = Sim.SpawnEnemy(S, "brute", S.p.x + 300, S.p.y, true), Sim.SpawnEnemy(S, "elite", S.p.x - 250, S.p.y + 100, true)
+    hold(e1); hold(e2)
+    local h1, h2 = e1.hp, e2.hp
+    Sim.Step(S, 1 / 60, 0, 0)
+    Sim.DropItem(S, "bomb", S.p.x, S.p.y)
+    Sim.Step(S, 1 / 60, 0, 0)
+    assert((e1.dead or e1.hp < h1) and e2.hp < h2, "bomb should damage everything on screen")
+    -- coin
+    local g0 = S.gold
+    Sim.DropItem(S, "coin", S.p.x, S.p.y, 7)
+    Sim.Step(S, 1 / 60, 0, 0)
+    assert(S.gold == g0 + 7, "coin value not counted")
+    print("pickups ok: brazier dropped " .. kind .. ", chicken, magnet, bomb, coin")
+  end
+  -- gold goblin flees, spills coins when killed, escapes after its life otherwise
+  do
+    local S = fresh("mage"); S.wlist = {}; S.weapons = {}
+    local gob = Sim.SpawnEnemy(S, "goblin", 150, 0, true)
+    for _ = 1, 30 do Sim.Step(S, 1 / 60, 0, 0) end
+    assert(gob.x > 150, "goblin should flee")
+    Sim.Damage(S, gob, 1e6)
+    Sim.Step(S, 1 / 60, 0, 0)
+    local coins = 0
+    for i = 1, S.nI do if S.items[i].kind == "coin" and S.items[i].value then coins = coins + 1 end end
+    assert(coins == C.ENEMIES.goblin.coins, "goblin coins: " .. coins)
+    local gob2 = Sim.SpawnEnemy(S, "goblin", 150, 0, true)
+    for _ = 1, 60 * 16 do Sim.Step(S, 1 / 60, 0, 0) end
+    local alive = false
+    for i = 1, S.nE do if S.enemies[i] == gob2 and not gob2.dead then alive = true end end
+    assert(not alive and S.kills == 1, "goblin should vanish after its life without a kill")
+    print("goblin ok: fled, " .. coins .. " coins, escaped later")
+  end
+  -- corruption spreads on death
+  do
+    local S = fresh("warlock", "corruption")
+    local a = Sim.SpawnEnemy(S, "brute", 100, 0, true); hold(a)
+    local b = Sim.SpawnEnemy(S, "brute", 140, 0, true); hold(b)
+    for _ = 1, 60 do Sim.Step(S, 1 / 60, 0, 0) end
+    local victim = a.corr and a or b
+    local other = victim == a and b or a
+    other.corr = nil; other.dot, other.dotT = 0, 0
+    assert(victim.corr, "corruption applied to nobody")
+    Sim.Damage(S, victim, 1e6)
+    Sim.Step(S, 1 / 60, 0, 0)
+    assert(other.corr and other.dotT > 0, "corruption should spread on death")
+    print("corruption ok: spread on death")
+  end
+  -- every new weapon and evolved form runs together, with all new enemies around (invulnerable)
+  do
+    local S = Sim.New({ class = "mage", viewR = 600, invuln = true })
+    for _, cls in ipairs({ "mage", "warlock", "hunter" }) do
+      for _, id in ipairs(C.CLASSES[cls].kit) do
+        if not S.weapons[id] then Sim.AddWeapon(S, id) end
+        if C.WEAPONS[id .. "_evo"] then Sim.AddWeapon(S, id .. "_evo") end
+      end
+    end
+    for _, k in ipairs({ "caster", "charger", "ooze", "goblin", "brazier", "skeleton" }) do
+      for j = 1, 3 do Sim.SpawnEnemy(S, k, math.cos(j) * 250, math.sin(j) * 250, true) end
+    end
+    for f = 1, 60 * 40 do
+      if S.state == "levelup" then Sim.Choose(S, 1) end
+      Sim.Step(S, 1 / 60, math.cos(f / 90), math.sin(f / 90))
+    end
+    assert(S.kills > 50, "all-weapons run killed too little: " .. S.kills)
+    print(string.format("all new weapons ok: %d weapons, t=%.0f kills=%d zones=%d traps=%d bolts=%d", #S.wlist, S.t, S.kills, S.nZ, S.nTr, S.nEB))
+  end
+end
+
+-- the same through the addon: draw every new class kit, enemy and pickup (render paths)
+for ci, cls in ipairs({ "mage", "warlock", "hunter" }) do
+  local _, m0 = ns.State()
+  if m0 == "levelup" then key("1", true) end
+  if select(2, ns.State()) ~= "over" then key("ESCAPE", true); tick(dt); key("Q", true); tick(dt) end
+  key("C", true); key(tostring(3 + ci), true)
+  local S = ns.State()
+  assert(S.class == cls, cls .. " run")
+  S.invuln = true
+  for _, id in ipairs(ns.Content.CLASSES[cls].kit) do if not S.weapons[id] then ns.Sim.AddWeapon(S, id) end end
+  for _, k in ipairs({ "caster", "charger", "ooze", "goblin", "brazier", "skeleton" }) do
+    for j = 1, 2 do ns.Sim.SpawnEnemy(S, k, S.p.x + math.cos(j * 2 + ci) * 200, S.p.y + math.sin(j * 2 + ci) * 200, true) end
+  end
+  for _, it in ipairs({ "magnet", "chicken", "bomb", "coin" }) do ns.Sim.DropItem(S, it, S.p.x + 60, S.p.y + 20, 3) end
+  for _ = 1, 60 * 10 do
+    tick(dt)
+    if select(2, ns.State()) == "levelup" then key("1", true) end
+  end
+  S.invuln = false
+  print(string.format("render ok: %s with its whole kit, t=%.0f kills=%d", cls, S.t, S.kills))
+end
+
 -- quick save / load
 do
   key("ESCAPE", true) -- close whatever screen

@@ -13,8 +13,8 @@ local class = os.getenv("CLASS") or "paladin"
 if os.getenv("VACUUM") then C.PLAYER.magnet = 3000 end
 math.randomseed(seed)
 
-local KEEP = (class == "druid") and 130 or 75 -- melee classes fight up close
-local S = Sim.New({ class = class, viewR = 560, stress = mode == "stress", cap = mode == "stress" and cap or nil })
+local KEEP = (class == "paladin" or class == "rogue") and 75 or 130 -- melee classes fight up close
+local S = Sim.New({ class = class, zone = os.getenv("ZONE"), viewR = 560, stress = mode == "stress", cap = mode == "stress" and cap or nil })
 local dt = 1 / 60
 local clock = os.clock
 local worst, total, steps = 0, 0, 0
@@ -29,6 +29,18 @@ local function bot()
     local dx, dy = p.x - e.x, p.y - e.y
     local d2 = dx * dx + dy * dy + 1
     if d2 < KEEP * KEEP then ax, ay = ax + dx / d2, ay + dy / d2 end
+  end
+  -- sidestep enemy bolts heading this way (move off their line)
+  for i = 1, (S.nEB or 0) do
+    local b = S.ebolts[i]
+    local dx, dy = p.x - b.x, p.y - b.y
+    local d2 = dx * dx + dy * dy + 1
+    if d2 < 100 * 100 and dx * b.vx + dy * b.vy > 0 then
+      local nx, ny = -b.vy, b.vx
+      local side = (dx * nx + dy * ny) >= 0 and 1 or -1
+      local l = math.sqrt(nx * nx + ny * ny) + 0.01
+      ax, ay = ax + side * nx / l / math.sqrt(d2) * 0.6, ay + side * ny / l / math.sqrt(d2) * 0.6
+    end
   end
   -- walk toward the nearest gem (players vacuum XP)
   local gx, gy, gd = 0, 0, math.huge
@@ -67,6 +79,7 @@ print(string.format(class .. " %s seed=%d result=%s t=%.0fs level=%d kills=%d hp
   mode, seed, S.state, S.t, S.p.level, S.kills, S.p.hp, S.p.maxhp, maxE, S.nG))
 local killer = S.lastHit and S.lastHit.kind or "-"
 print("  level by minute: " .. table.concat(marks, " "))
+print(string.format("  gold %d   zone %s", S.gold or 0, tostring(S.zone)))
 print("  last hit by: " .. killer .. "   boss " .. (S.bossKilled and "killed" or (S.bossSpawned and "alive" or "not spawned")))
 print("  weapons: " .. table.concat(weapons, " ") .. "   passives: " .. table.concat(passives, " "))
 print(string.format("  step ms: avg %.3f worst %.3f  (%s, lua mem %.0f KB)", total / steps, worst, _VERSION, collectgarbage("count")))
