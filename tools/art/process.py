@@ -72,9 +72,16 @@ PICKS = {
     "ground_barrens":  (6502, 256, "tile"),
     "ground_elwynn":   (6602, 256, "tile"),
     "ground_snow":     (6701, 256, "tile"),  # 6704 had straight horizontal drift streaks that show when tiled
+    # 0.6 set
+    "hero_dk":      (7003, 64, "sprite"),
+    "dk_ghoul":     (7153, 64, "sprite"),  # second prompt (yellow-green, on all fours); 7101-7104 looked like ghoul.tga
+    "deathcoil":    (7203, 32, "glow"),
+    "dnd":          (7303, 64, "glow"),
+    "howlingblast": (7452, 64, "glow"),  # second prompt (radial burst); ring seeds 7401-7404 looked like blizzard.tga
 }
 BOOST = {"bat": 1.5, "hero_rogue": 1.3, "shuriken": 1.6, "knife": 1.3,
-         "hero_warlock": 1.3, "hero_hunter": 1.2, "bomb": 1.5, "caster": 1.3, "charger": 1.3}  # brightness multiplier per sprite
+         "hero_warlock": 1.3, "hero_hunter": 1.2, "bomb": 1.5, "caster": 1.3, "charger": 1.3,
+         "hero_dk": 1.3}  # brightness multiplier per sprite
 TOL = {"shield": 110}  # wider near-white tolerance: eats the pale glow halo that would leave a cream ring
 DARK = {"ground_barrens": 0.6, "ground_snow": 0.6}  # per-tile brightness multiplier (default 0.72 like ground.tga)
 TSAT = {"ground_barrens": 0.7}  # per-tile saturation multiplier (default 1)

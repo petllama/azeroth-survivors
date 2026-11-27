@@ -10,6 +10,7 @@ Sprites in `AzerothSurvivors/Art/*.tga` are generated with the local image model
     uv run tools/art/slash_proc.py          # procedural slash.tga source (no model)
     uv run tools/art/preview.py             # out/preview.png, out/ground_3x3.png, out/native_strip.png
     uv run tools/art/preview05.py           # 0.5 set: out/native_strip_05(_2x).png on all 5 grounds, out/ground_<zone>_3x3.png
+    uv run tools/art/preview06.py           # 0.6 set: out/native_strip_06(_2x).png next to hero/hero_warlock/ghoul for scale and contrast
     systemctl --user stop swarmui flux3-pup
 
 `out/` is git-ignored. Seeds are deterministic: candidate `<name>_<seed>` came from `--seed <first> -n 4`
@@ -78,6 +79,11 @@ Sprites in `AzerothSurvivors/Art/*.tga` are generated with the local image model
 | ground_barrens.tga | 256 | 6502 | tile | brightness x0.6, saturation x0.7 (raw is bright orange) |
 | ground_elwynn.tga | 256 | 6602 | tile | |
 | ground_snow.tga | 256 | 6701 | tile | brightness x0.6; 6704 had straight drift streaks that showed when tiled. Lightest floor: white glows (frostbolt, blizzard) read weakly on it |
+| hero_dk.tga | 64 | 7003 | sprite | armored rune knight hero; brightness x1.3 (dark steel plate). Long sword makes it a bit narrower than hero.tga |
+| dk_ghoul.tga | 64 | 7153 | sprite | risen ghoul minion; second prompt (yellow-green, on all fours, bone spikes, blue eyes); seeds 7101-7104 were upright dark-green ghouls that looked like ghoul.tga |
+| deathcoil.tga | 32 | 7203 | glow | green-gold skull bolt |
+| dnd.tga | 64 | 7303 | glow | top-down green rune circle with mist; runes are illegible at 64 |
+| howlingblast.tga | 64 | 7452 | glow | second prompt (radial icy starburst); ring seeds 7401-7404 looked like blizzard.tga |
 
 ## Processing (process.py)
 
