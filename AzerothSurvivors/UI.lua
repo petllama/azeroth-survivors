@@ -130,15 +130,13 @@ function UI.Init(frame)
   sub:SetPoint("TOP", title, "BOTTOM", 0, -12)
   sub:SetWidth(900)
   sub:SetText("Survive the Scourge for 10 minutes. Move with |cffffd100WASD|r or the |cffffd100arrow keys|r; your skills cast themselves.\nCollect crystals to level up and choose upgrades. |cffffd100ESC|r pauses. Combat with real mobs pauses the game.")
-  t.cards = {}
-  -- two rows of three cards
+  t.cards, t.sub = {}, sub
+  -- rows of three cards (placed by UI.LayoutClasses: hidden classes get no card until unlocked)
   local CW, CH = 300, 150
   for i, id in ipairs(C.CLASS_ORDER) do
     local cd = C.CLASSES[id]
     local b = CreateFrame("Button", nil, t)
     b:SetSize(CW, CH)
-    local col, row = (i - 1) % 3, floor((i - 1) / 3)
-    b:SetPoint("TOP", sub, "BOTTOM", (col - 1) * (CW + 14), -16 - row * (CH + 10))
     local bg = b:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
     bg:SetColorTexture(0.1, 0.09, 0.13, 0.95)
@@ -177,21 +175,17 @@ function UI.Init(frame)
     b.best:SetJustifyH("RIGHT")
     b.best:SetWidth(CW - 172)
     b.best:SetTextColor(0.7, 0.7, 0.7)
-    local key = font(b, 14)
-    key:SetPoint("TOPLEFT", 4, -3)
-    key:SetText(i)
+    b.key = font(b, 14)
+    b.key:SetPoint("TOPLEFT", 4, -3)
+    b.key:SetText(i)
     b:SetScript("OnClick", function() ns.StartClass(id) end)
     t.cards[id] = b
   end
-  local rows = floor((#C.CLASS_ORDER + 2) / 3)
-  local below = -16 - rows * (CH + 10)
   t.cont = CreateFrame("Button", nil, t, "UIPanelButtonTemplate")
   t.cont:SetSize(360, 26)
-  t.cont:SetPoint("TOP", sub, "BOTTOM", 0, below - 34)
   t.cont:SetScript("OnClick", function() ns.QuickLoad() end)
-  local go = font(t, 16)
-  go:SetPoint("TOP", sub, "BOTTOM", 0, below - 6)
-  go:SetText("Press |cffffd1001|r-|cffffd100" .. #C.CLASS_ORDER .. "|r or click a class.  |cff00ff00SPACE|r plays the highlighted one.")
+  t.go = font(t, 16)
+  UI.LayoutClasses(C.VisibleClasses(ns.db))
   t.champion = font(t, 13)
   t.champion:SetPoint("TOP", 0, -8)
   t.champion:SetTextColor(1, 0.5, 0.15)
@@ -449,6 +443,38 @@ function UI.Init(frame)
   UI.toast = toast
 end
 
+-- Class cards for the visible classes (keys 1..n): rows of three; up to six keep the 300x150 cards, a
+-- seventh (the unlocked hidden class) makes three rows of shorter cards with the last row centred.
+local CARD_W, CARD_GAP = 300, 14
+function UI.LayoutClasses(list)
+  local t = panels.title
+  local n = #list
+  local rows = math.max(1, math.ceil(n / 3))
+  local CH, gap = rows > 2 and 120 or 150, rows > 2 and 6 or 10 -- 3 rows: compact, clear of the Ascension selector
+  local shown = {}
+  for i, id in ipairs(list) do
+    local b = t.cards[id]
+    if b then
+      shown[id] = true
+      local col, row = (i - 1) % 3, floor((i - 1) / 3)
+      local inRow = math.min(3, n - row * 3)
+      b:SetSize(CARD_W, CH)
+      b:ClearAllPoints()
+      b:SetPoint("TOP", t.sub, "BOTTOM", (col - (inRow - 1) / 2) * (CARD_W + CARD_GAP), -16 - row * (CH + gap))
+      b.key:SetText(i)
+      b:Show()
+    end
+  end
+  for id, b in pairs(t.cards) do if not shown[id] then b:Hide() end end
+  local below = -16 - rows * (CH + gap)
+  t.cont:ClearAllPoints()
+  t.cont:SetPoint("TOP", t.sub, "BOTTOM", 0, below - 34)
+  t.go:ClearAllPoints()
+  t.go:SetPoint("TOP", t.sub, "BOTTOM", 0, below - 6)
+  t.go:SetText("Press |cffffd1001|r-|cffffd100" .. n .. "|r or click a class.  |cff00ff00SPACE|r plays the highlighted one.")
+  t.classList = list
+end
+
 function UI.Show(name)
   if name ~= "title" and subOpen then UI.ShowSub(nil) end
   for n, p in pairs(panels) do
@@ -462,6 +488,7 @@ local function hex(c) return string.format("%02x%02x%02x", c[1] * 255, c[2] * 25
 
 function UI.TitleBest(db, selected)
   local t = panels.title
+  UI.LayoutClasses(C.VisibleClasses(db))
   local xpM, goldM, n = C.CurseMult(db.curses)
   t.info:SetText(string.format("|cffffd100%d gold|r banked     Curses: %s", db.gold or 0,
     n > 0 and string.format("|cffff6060%d active|r  (XP x%.2f, gold x%.2f)", n, xpM, goldM) or "none"))
@@ -727,7 +754,15 @@ end
 -- achievement toast
 ---------------------------------------------------------------------------
 function UI.Toast(a)
-  toast.queue[#toast.queue + 1] = a
+  if a.toastHead then
+    table.insert(toast.queue, 1, a) -- a class unlock goes first and replaces a plain toast on screen
+    if toast:IsShown() and toast.shownA and not toast.shownA.toastHead then
+      table.insert(toast.queue, 2, toast.shownA)
+      toast:Hide()
+    end
+  else
+    toast.queue[#toast.queue + 1] = a
+  end
   if not toast:IsShown() then UI.NextToast() end
 end
 
@@ -735,10 +770,12 @@ function UI.NextToast()
   local a = table.remove(toast.queue, 1)
   if not a then return end
   toast.icon:SetTexture(a.icon)
+  toast.head:SetText(a.toastHead or "Achievement Earned")
   toast.name:SetText(a.name)
   toast.sub:SetText(a.unlockText or a.desc)
-  toast.t = 4
-  toast.shownId = a.id
+  toast.t = a.toastHead and 7 or 4
+  toast.shownId, toast.shownA = a.id, a
+  if a.toastSound then ns.Sfx(a.toastSound) end
   toast:SetAlpha(1)
   toast:Show()
 end
@@ -909,10 +946,26 @@ function UI.RefreshSub()
     local xpM, goldM, n = C.CurseMult(db.curses)
     p.mult:SetText(string.format("%d active:  XP x%.2f   gold x%.2f", n, xpM, goldM))
   elseif subOpen == "ach" then
-    local got, total = 0, #C.ACHIEVEMENTS
+    local got, total = 0, 0
+    local vis = {}
     for _, r in ipairs(p.rows) do
       local a
       for _, x in ipairs(C.ACHIEVEMENTS) do if x.id == r.id then a = x end end
+      if a.hidden and not db[a.hidden] then r:Hide() else r:Show(); vis[#vis + 1] = r end
+    end
+    local h = math.min(40, floor(446 / math.max(1, #vis))) -- hidden rows leave no gap; rows fit above Back
+    for k, r in ipairs(vis) do
+      r:ClearAllPoints()
+      r:SetPoint("TOP", 0, -62 - (k - 1) * h)
+      r:SetHeight(h - 4)
+      r.icon:SetSize(h - 10, h - 10)
+      r.name:SetFont(STANDARD_TEXT_FONT, h < 34 and 12 or 13, "OUTLINE")
+      r.desc:SetFont(STANDARD_TEXT_FONT, h < 34 and 10 or 11, "")
+    end
+    for _, r in ipairs(vis) do
+      local a
+      for _, x in ipairs(C.ACHIEVEMENTS) do if x.id == r.id then a = x end end
+      total = total + 1
       local have = db.ach[r.id] and true or false
       if have then got = got + 1 end
       r.name:SetText(have and ("|cffffd100" .. a.name .. "|r") or ("|cff888888" .. a.name .. "|r"))

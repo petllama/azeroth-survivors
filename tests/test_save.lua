@@ -2,7 +2,7 @@
 -- Usage: lua5.1 tests/test_save.lua
 local ROOT = (arg[0]:match("^(.*)/tests/") or ".") .. "/AzerothSurvivors/"
 local ns = {}
-for _, f in ipairs({ "Content.lua", "Sim.lua" }) do assert(loadfile(ROOT .. f))("AzerothSurvivors", ns) end
+for _, f in ipairs({ "Content.lua", "ContentDK.lua", "Sim.lua" }) do assert(loadfile(ROOT .. f))("AzerothSurvivors", ns) end
 local Sim, C = ns.Sim, ns.Content
 
 local function plain(v, seen, path)

@@ -54,7 +54,12 @@ function Widget:GetHighlightTexture() return widget("Texture", self) end
 function Widget:SetText(t) assert(t ~= nil, "SetText(nil)"); self._text = t end
 function Widget:GetText() return self._text end
 function Widget:SetFont(path, size) assert(path and size, "SetFont args"); self._fsize = size end
-function Widget:SetTexture(path) self._tex = path; return not _G.__noArt end
+function Widget:SetTexture(path)
+  self._tex = path
+  if _G.__missingArt and type(path) == "string" and _G.__missingArt[path:match("([^\\]+)$") or ""] then return false end
+  return not _G.__noArt
+end
+function Widget:SetVertexColor(r, g, b) self._vc = { r, g, b } end
 function Widget:SetTexCoord(...) self._tc = { ... } end
 function Widget:SetPropagateKeyboardInput(v) assert(not _G.__inCombat, "SetPropagateKeyboardInput in combat"); self._prop = v end
 
@@ -114,7 +119,7 @@ SOUNDKIT = { UI_GARRISON_COMMAND_TABLE_FOLLOWER_LEVEL_UP = 46893, UI_GARRISON_CO
   UI_GARRISON_ARCHITECT_TABLE_UPGRADE = 44302, IG_MAINMENU_OPTION_CHECKBOX_ON = 856,
   UI_BONUS_LOOT_ROLL_START = 31579, TRADING_POST_UI_COLLECTING_COINS = 218228, UI_GARRISON_TOAST_INVASION_ALERT = 44292,
   UI_73_ARTIFACT_OVERLOADED_ORB_IMPACT_MEDIUM = 97597, UI_ADVENTURES_HEAL_FOLLOWER = 169288, UI_POWER_AURA_GENERIC = 23287,
-  PUT_DOWN_SMALL_CHAIN = 1212, UI_73_ARTIFACT_OVERLOADED_ORB_IMPACT_LOW = 97598 }
+  PUT_DOWN_SMALL_CHAIN = 1212, UI_73_ARTIFACT_OVERLOADED_ORB_IMPACT_LOW = 97598, UI_LEGENDARY_LOOT_TOAST = 63971 }
 local played = {}
 function PlaySound(id) assert(type(id) == "number", "PlaySound needs a SoundKit id"); played[id] = (played[id] or 0) + 1; return true end
 -- guild / addon messages
@@ -263,7 +268,7 @@ do
   for _, s in pairs(UI.subs) do skip[s] = true end
   local boxes = {}
   for _, r in ipairs(t._children) do
-    if r._pt and not skip[r] and r._pt[2] ~= nil and (r._kind ~= "FontString" or (r._text or r == t.champion or r == t.info)) then
+    if r._pt and r._shown and not skip[r] and r._pt[2] ~= nil and (r._kind ~= "FontString" or (r._text or r == t.champion or r == t.info)) then
       if r == t.champion and not r._text then r._text = "Champion of Azeroth" end
       if r == t.info and not r._text then r._text = "|cffffd10099999 gold|r banked     Curses: Horde, Brutal, Haste, Frail" end
       local x, y, w, h = rect(r)
@@ -281,8 +286,25 @@ do
     end
   end
   print(string.format("title layout ok%s: %d regions inside 1000x700, no overlaps", label and (" (" .. label .. ")") or "", #boxes))
+    return #boxes
   end
   checkTitleLayout()
+end
+do
+  local UI, C = ns.UI, ns.Content
+  local t = UI.panels.title
+  t.cont:Show(); t.cont:SetText("Continue saved Death Knight run (09:59, level 63)   F9")
+  assert(not ns.db.unlockedDK and #C.VisibleClasses(ns.db) == 6, "the hidden class starts hidden")
+  assert(not t.cards.deathknight._shown, "hidden class card shown before the unlock")
+  local n6 = checkTitleLayout("6 classes")
+  ns.db.unlockedDK = true
+  UI.LayoutClasses(C.VisibleClasses(ns.db))
+  assert(t.cards.deathknight._shown and t.cards.deathknight.key._text == 7, "7th card with key 7 after the unlock")
+  local n7 = checkTitleLayout("7 classes, centred third row")
+  assert(n7 == n6 + 1, "one more card")
+  ns.db.unlockedDK = false
+  UI.LayoutClasses(C.VisibleClasses(ns.db))
+  assert(not t.cards.deathknight._shown, "relayout hides the card again")
 end
 
 local function key(k, isDown)
@@ -346,7 +368,7 @@ _G.__inCombat = false; fireAll("PLAYER_REGEN_ENABLED")
 key("Q", true); tick(dt)
 key("SPACE", true); for _ = 1, 120 do tick(dt) end
 -- every class: game over -> C -> class key, then play a while with level-ups
-for i, cls in ipairs(ns.Content.CLASS_ORDER) do
+for i, cls in ipairs(ns.Content.VisibleClasses(ns.db)) do
   local S0, m0 = ns.State()
   if m0 == "levelup" then key("1", true) end
   if m0 == "chest" then key("SPACE", true); key("SPACE", true); key("SPACE", true) end
@@ -887,7 +909,7 @@ do
   local function startClass(cls)
     settle()
     key("C", true)
-    for i, id in ipairs(C.CLASS_ORDER) do if id == cls then key(tostring(i), true) end end
+    for i, id in ipairs(C.VisibleClasses(ns.db)) do if id == cls then key(tostring(i), true) end end
     local S = ns.State()
     assert(S.class == cls and select(2, ns.State()) == "play", "start " .. cls)
     S.invuln = true
@@ -961,7 +983,7 @@ do
     assert(n == w.count, "hammers: " .. n .. " orbit textures shown for " .. w.count)
   end
   -- every class, 60 s each: all damage goes to a named skill or source (no "Other" row)
-  for _, cls in ipairs(C.CLASS_ORDER) do
+  for _, cls in ipairs(C.VisibleClasses(ns.db)) do
     S = startClass(cls)
     play(3600)
     assert(not S.dmgBy.other, cls .. ": damage credited to 'other': " .. tostring(S.dmgBy.other))
@@ -1326,6 +1348,206 @@ do
   end
   _G.__inGuild = false
   settle()
+end
+-- the hidden class: invisible until The Frost Lich dies in a run with 2+ curses; then key 7, its kit, ghouls,
+-- Death Coil heals, five evolutions, its achievements, the unlock toast and sound on the results screen
+do
+  local UI, Sim, C = ns.UI, ns.Sim, ns.Content
+  local function settle()
+    if not frame._shown then try(SlashCmdList.AZEROTHSURVIVORS, "") end
+    for _ = 1, 20 do
+      local _, m = ns.State()
+      if m == "over" then return end
+      if m == "levelup" then key("1", true)
+      elseif m == "chest" then key("SPACE", true)
+      elseif m == "play" then key("ESCAPE", true)
+      elseif m == "pause" then key("Q", true)
+      elseif m == "title" then key("SPACE", true) end
+    end
+    assert(select(2, ns.State()) == "over", "could not reach game over")
+  end
+  local function play(n)
+    for _ = 1, n do
+      tick(dt)
+      local _, m = ns.State()
+      if m == "levelup" then key("1", true) elseif m == "chest" then key("SPACE", true); key("SPACE", true) end
+    end
+  end
+  local t = UI.panels.title
+  ns.db.unlockedDK = false
+  ns.db.ach.unlock_dk, ns.db.ach.win_deathknight = nil, nil
+  -- hidden: no card, key 7 and StartClass do nothing, no achievement rows, no 6th-slot offers
+  settle()
+  key("C", true)
+  assert(select(2, ns.State()) == "title" and not t.cards.deathknight._shown, "hidden class card on the class screen")
+  assert(t.go._text:match("%-|cffffd1006|r"), "keys 1-6 before the unlock: " .. t.go._text)
+  key("7", true)
+  assert(select(2, ns.State()) == "title" and frame._prop == true, "key 7 must do nothing before the unlock")
+  ns.StartClass("deathknight")
+  assert(select(2, ns.State()) == "title", "StartClass must refuse the hidden class")
+  t.tabs.ach:Click()
+  for _, r in ipairs(UI.subs.ach.rows) do
+    if r.id == "unlock_dk" or r.id == "win_deathknight" then assert(not r._shown, "hidden achievement row shown: " .. r.id) end
+  end
+  local visRows = 0
+  for _, r in ipairs(UI.subs.ach.rows) do if r._shown then visRows = visRows + 1 end end
+  assert(UI.subs.ach.head._text == string.format("0 / %d earned", visRows) or UI.subs.ach.head._text:match("/ " .. visRows .. " earned"), "achievement count without hidden rows")
+  key("ESCAPE", true)
+  local dkSkill = {}
+  for _, id in ipairs(C.CLASSES.deathknight.kit) do dkSkill[id] = true end
+  local function offersDK(unlocks)
+    local S = Sim.New({ class = "paladin", viewR = 600, unlocks = unlocks })
+    for _ = 1, 400 do
+      for _, c in ipairs(Sim.RollChoices(S)) do if c.kind == "weapon" and dkSkill[c.id] then return true end end
+    end
+    return false
+  end
+  assert(not offersDK({ slot = 1 }), "6th-slot offers must not include the hidden class's skills before the unlock")
+  assert(offersDK({ slot = 1, unlockedDK = true }), "6th-slot offers include the hidden class's skills after the unlock")
+  -- a boss kill with one curse: no unlock
+  local function bossRun(curses)
+    ns.db.curses = curses
+    key("1", true)
+    local S = ns.State()
+    assert(S.class == "paladin", "paladin run for the boss kill")
+    S.invuln = true
+    local boss = Sim.SpawnEnemy(S, "boss", S.p.x + 200, S.p.y, true)
+    Sim.Damage(S, boss, 1e9)
+    assert(S.bossKilled, "boss should be killed")
+    play(150) -- live achievement checks run: the unlock waits for the results screen
+    assert(not ns.db.unlockedDK, "the class must not unlock during play")
+    settle()
+    return S
+  end
+  bossRun({ horde = true })
+  assert(not ns.db.unlockedDK, "one curse must not unlock the class")
+  key("C", true)
+  -- two curses: unlocked on the results screen, with the unlock toast and its own sound
+  local n0 = played[SOUNDKIT.UI_LEGENDARY_LOOT_TOAST] or 0
+  bossRun({ horde = true, brutal = true })
+  assert(ns.db.unlockedDK == true and ns.db.ach.unlock_dk, "Frost Lich + 2 curses should unlock the class")
+  assert(UI.panels.over._shown and UI.toast._shown and UI.toast.shownId == "unlock_dk", "unlock toast on the results screen")
+  assert(UI.toast.head._text == "A new class has risen from the grave" and UI.toast.name._text == "Death Knight", "unlock toast text")
+  assert((played[SOUNDKIT.UI_LEGENDARY_LOOT_TOAST] or 0) == n0 + 1, "unlock sound")
+  assert(UI.panels.over.ach._text:match("Death Knight"), "results list the unlock")
+  ns.db.curses = {}
+  -- visible: 7 cards, key 7 plays the class
+  key("C", true)
+  assert(t.cards.deathknight._shown and t.go._text:match("%-|cffffd1007|r"), "7 cards after the unlock")
+  checkTitleLayout("class screen after the unlock")
+  do -- worst case: 7 cards, the Ascension selector and Continue all shown
+    local UI = ns.UI
+    ns.db.asc.paladin = math.max(ns.db.asc.paladin or 0, 3); ns.db.ascSel.paladin = 2
+    UI.TitleBest(ns.db, "paladin")
+    UI.panels.title.cont:Show(); UI.panels.title.cont:SetText("Continue saved Death Knight run (09:59, level 63)   F9")
+    assert(UI.panels.title.asc._shown, "Ascension selector shown for paladin")
+    checkTitleLayout("7 classes + Ascension + Continue")
+  end
+  t.tabs.ach:Click()
+  for _, r in ipairs(UI.subs.ach.rows) do
+    if r.id == "unlock_dk" or r.id == "win_deathknight" then assert(r._shown, "achievement row should show after the unlock: " .. r.id) end
+  end
+  key("ESCAPE", true)
+  -- the new art may not be installed yet: every key falls back (hero -> class icon, ghoul -> tinted ghoul.tga)
+  _G.__missingArt = { hero_dk = true, dk_ghoul = true, deathcoil = true, dnd = true, howlingblast = true }
+  key("7", true)
+  local S = ns.State()
+  assert(S.class == "deathknight" and select(2, ns.State()) == "play" and S.wlist[1].id == "obliterate", "key 7 starts the Death Knight")
+  assert(S.p.maxhp == 125 and S.p.armor >= 1, "Death Knight stats")
+  S.invuln = true
+  for _, id in ipairs(C.CLASSES.deathknight.kit) do if not S.weapons[id] then Sim.AddWeapon(S, id) end end
+  for _, k in ipairs({ "caster", "charger", "ooze", "skeleton", "brute" }) do
+    for j = 1, 3 do Sim.SpawnEnemy(S, k, S.p.x + math.cos(j * 2) * 200, S.p.y + math.sin(j * 2) * 200, true) end
+  end
+  play(60 * 20)
+  for _, id in ipairs(C.CLASSES.deathknight.kit) do
+    assert((S.dmgBy[id] or 0) > 0, "Death Knight skill dealt no damage: " .. id)
+  end
+  assert(S.weapons.raisedead.pets and #S.weapons.raisedead.pets == 1, "ghoul pet")
+  do
+    local hero, ghoul = false, 0
+    local function walk(r)
+      for _, c in ipairs(r._children) do
+        if c._kind == "Texture" and c._shown and type(c._tex) == "string" then
+          if c._tex == C.CLASSES.deathknight.icon then hero = true end
+          local tint = C.WEAPONS.raisedead.petTint
+          if c._tex:match("\\ghoul$") and c._vc and c._vc[1] == tint[1] and c._vc[2] == tint[2] then ghoul = ghoul + 1 end
+        end
+        walk(c)
+      end
+    end
+    walk(frame)
+    assert(hero, "without hero_dk the hero is drawn with the class icon")
+    if not _G.__noArt then assert(ghoul >= 1, "without dk_ghoul the pet uses the ghoul art") end
+  end
+  _G.__missingArt = nil
+  -- Death Coil heals per hit (straight on the sim, no regen)
+  do
+    local S2 = Sim.New({ class = "deathknight", viewR = 600, weapon = "deathcoil", cap = 0 })
+    S2.p.hp, S2.p.regen = 50, 0
+    for j = 1, 4 do local e = Sim.SpawnEnemy(S2, "brute", 140 + j * 20, j * 10, true); e.root = 1e9 end
+    for _ = 1, 60 * 4 do Sim.Step(S2, 1 / 60, 0, 0) end
+    assert((S2.dmgBy.deathcoil or 0) > 0 and S2.p.hp > 50, "Death Coil should heal: hp " .. S2.p.hp)
+    -- the ghoul claws a held brute
+    local S3 = Sim.New({ class = "deathknight", viewR = 600, weapon = "raisedead", cap = 0 })
+    local e = Sim.SpawnEnemy(S3, "brute", 150, 0, true); e.root = 1e9
+    local hp0 = e.hp
+    for _ = 1, 240 do Sim.Step(S3, 1 / 60, 0, 0) end
+    assert(e.hp < hp0 or e.dead, "the ghoul dealt no damage")
+    print(string.format("death coil ok: hp 50 -> %.1f; ghoul ok: brute %d -> %d hp", S2.p.hp, hp0, math.max(0, e.hp)))
+  end
+  -- five evolutions through chests
+  local evolved = {}
+  for _, wid in ipairs(C.CLASSES.deathknight.kit) do
+    local r
+    for _, x in ipairs(C.EVOLUTIONS) do if x.weapon == wid then r = x end end
+    assert(r and C.WEAPONS[r.into], "recipe for " .. wid)
+    while S.weapons[wid].level < C.MAX_WEAPON_LEVEL do Sim.LevelWeapon(S, wid) end
+    if not S.passives[r.passive] then
+      if #S.plist >= C.PASSIVE_SLOTS then table.remove(S.plist) end
+      Sim.AddPassive(S, r.passive)
+    end
+    local slot
+    for i, w in ipairs(S.wlist) do if w.id == wid then slot = i end end
+    if select(2, ns.State()) ~= "play" then play(1) end
+    Sim.DropItem(S, "chest", S.p.x, S.p.y, 1)
+    tick(dt)
+    assert(select(2, ns.State()) == "chest", "chest screen for " .. wid)
+    key("SPACE", true)
+    assert(S.weapons[r.into] and not S.weapons[wid] and S.wlist[slot].id == r.into, wid .. " should evolve into " .. r.into)
+    key("SPACE", true)
+    evolved[#evolved + 1] = C.WEAPONS[r.into].name
+  end
+  for j = 1, 8 do -- a held pack in melee reach (ranged coils and ghouls otherwise kill everything first)
+    local e = Sim.SpawnEnemy(S, "elite", S.p.x + math.cos(j) * 70, S.p.y + math.sin(j) * 70, true); e.root = 1e9
+  end
+  play(60 * 20)
+  for _, w in ipairs(S.wlist) do
+    if w.def.evolved then assert((S.dmgBy[w.id] or 0) > 0, w.id .. " should deal damage; " .. (function() local o = {} for k, v in pairs(S.dmgBy) do o[#o + 1] = k .. "=" .. math.floor(v) end return table.concat(o, " ") .. " t=" .. S.t .. " nE=" .. S.nE .. " mode=" .. tostring(select(2, ns.State())) end)()) end
+  end
+  local army = S.weapons.raisedead_evo
+  assert(army and #army.pets == 4, "Army of the Dead: 4 ghouls")
+  if not _G.__noArt then -- one shown ghoul texture per pet (the pre-evolution ghoul is hidden)
+    local n = 0
+    local function walk(r)
+      for _, c in ipairs(r._children) do
+        if c._kind == "Texture" and c._shown and type(c._tex) == "string" and c._tex:match("\\dk_ghoul$") then n = n + 1 end
+        walk(c)
+      end
+    end
+    walk(frame)
+    assert(n == 4, n .. " ghoul textures shown for 4 ghouls")
+  end
+  assert(not S.dmgBy.other, "Death Knight: damage credited to 'other'")
+  for k in pairs(S.dmgBy) do assert(C.WEAPONS[k] or UI.SOURCES[k], "unknown damage source " .. k) end
+  -- Champion of Azeroth stays at the six base classes
+  local have = {}
+  for _, c in ipairs(C.CLASS_ORDER) do if c ~= "deathknight" then have["win_" .. c] = true end end
+  for _, a in ipairs(C.ACHIEVEMENTS) do
+    if a.id == "allclasses" then assert(a.check({ have = have }), "Champion of Azeroth needs only the six base classes") end
+  end
+  settle()
+  print("hidden class ok: hidden before, 1 curse no unlock, 2 curses unlock + toast + sound, 7 cards, key 7, kit, ghoul, Death Coil heal, evolved: " .. table.concat(evolved, ", "))
 end
 try(SlashCmdList.AZEROTHSURVIVORS, "stress 600")
 for _ = 1, 600 do tick(dt) end

@@ -2,7 +2,8 @@
 local addonName, ns = ...
 local C, Sim, R, UI = ns.Content, ns.Sim, ns.Render, ns.UI
 
-local DEFAULTS = { anim = true, numbers = true, debug = false, scale = 1, runs = 0, class = "paladin", flightOffer = true, sound = true, gold = 0 }
+local DEFAULTS = { anim = true, numbers = true, debug = false, scale = 1, runs = 0, class = "paladin", flightOffer = true, sound = true, gold = 0,
+  unlockedDK = false } -- the hidden class: set by the unlock_dk achievement (Frost Lich killed with 2+ curses)
 -- db.meta = shop ranks, db.curses = active curses, db.ach = earned, db.guild = board,
 -- db.asc[class] = highest Ascension unlocked, db.ascSel[class] = the level chosen for the next run
 local TABLES = { "meta", "curses", "ach", "guild", "asc", "ascSel" }
@@ -51,6 +52,7 @@ local SFX = {
   magnet   = { "UI_POWER_AURA_GENERIC", 23287, max = 1, window = 0.5 },
   brazier  = { "PUT_DOWN_SMALL_CHAIN", 1212, max = 1, window = 0.3 },
   ebolt    = { "UI_73_ARTIFACT_OVERLOADED_ORB_IMPACT_LOW", 97598, max = 1, window = 0.35 },
+  unlock   = { "UI_LEGENDARY_LOOT_TOAST", 63971 }, -- a class unlock (distinct from the achievement toast)
 }
 -- Sim fx / pickup kinds that make a sound (same name in SFX)
 local FX_SOUND = { goblin = true, goblinKilled = true, ring = true }
@@ -145,7 +147,7 @@ local hooks = {
       res.gold = math.floor(s.gold or 0)
       db.gold = (db.gold or 0) + math.max(0, res.gold - (s.banked or 0))
       s.banked = res.gold
-      res.ach = ns.CheckAchievements(s, won)
+      res.ach = ns.CheckAchievements(s, won, true) -- final: class unlocks are checked on the results screen
       if not s.won10 or s.endless then ns.Social.OnRunEnd(s, won) end -- a cash-out was sent at 10:00
     end
     UI.Over(s, won, res)
@@ -198,19 +200,21 @@ end
 ---------------------------------------------------------------------------
 local function countCurses(curses) local _, _, n = C.CurseMult(curses) return n end
 
-function ns.RunSummary(s, won)
+function ns.RunSummary(s, won, final)
   local have = {}
   for k in pairs(ns.db.ach) do have[k] = true end
   return { class = s.class, t = s.t, won = won and true or false, kills = s.kills, level = s.p.level,
     bossKilled = s.bossKilled and true or false, evolved = s.nEvolved or 0, curses = countCurses(s.curses),
-    gold = s.gold or 0, have = have, asc = s.asc or 0, endless = Sim.EndlessTime(s) }
+    gold = s.gold or 0, have = have, asc = s.asc or 0, endless = Sim.EndlessTime(s),
+    final = final and true or false }
 end
 
 -- award every achievement whose check passes; returns the new ones
-function ns.CheckAchievements(s, won)
+-- final: the run is over (results screen); achievements marked `final` (class unlocks) pass only then
+function ns.CheckAchievements(s, won, final)
   if not s or s.stress then return {} end
-  local sum = ns.RunSummary(s, won)
-  local new = {}
+  local sum = ns.RunSummary(s, won, final)
+  local new, ownSound = {}, false
   for _, a in ipairs(C.ACHIEVEMENTS) do
     if not ns.db.ach[a.id] then
       local ok, got = pcall(a.check, sum)
@@ -218,11 +222,13 @@ function ns.CheckAchievements(s, won)
         ns.db.ach[a.id] = time and time() or true
         sum.have[a.id] = true
         new[#new + 1] = a
+        if a.unlockFlag then ns.db[a.unlockFlag] = true end
+        if a.toastSound then ownSound = true end
         UI.Toast(a)
       end
     end
   end
-  if #new > 0 then ns.Sfx("ach") end
+  if #new > 0 and not ownSound then ns.Sfx("ach") end -- an unlock toast plays its own sound
   return new
 end
 
@@ -266,13 +272,15 @@ end
 
 local function startRun()
   if S then R.ReleaseAll(S) end
-  local cls = C.CLASSES[ns.db.class] and ns.db.class or "paladin"
+  local cls = C.ClassVisible(ns.db.class, ns.db) and ns.db.class or "paladin"
   local stress = stressCap and true or nil
   local zone = ns.DetectZone()
   local asc = not stress and math.min(ns.db.asc[cls] or 0, ns.db.ascSel[cls] or 0) or 0
+  local unlocks = C.UnlockBonus(ns.db.ach)
+  if ns.db.unlockedDK then unlocks.unlockedDK = true end -- hidden class skills join the 6th-slot offers
   S = Sim.New({ class = cls, zone = zone, viewR = viewR(), hooks = hooks, stress = stress, cap = stressCap,
     meta = not stress and ns.db.meta or nil, curses = not stress and ns.db.curses or nil,
-    unlocks = not stress and C.UnlockBonus(ns.db.ach) or nil, asc = asc })
+    unlocks = not stress and unlocks or nil, asc = asc })
   S.achT = 0
   S.runId = string.format("%d-%d", time and time() or 0, math.random(1, 999999))
   R.SetClass(C.CLASSES[cls])
@@ -355,6 +363,7 @@ end
 
 function ns.StartClass(id)
   if mode ~= "title" and mode ~= "over" then return end
+  if not C.ClassVisible(id, ns.db) then return end
   ns.db.class = id
   startRun()
 end
@@ -498,8 +507,8 @@ local function onKey(key, down)
     if mode == "title" or mode == "over" then startRun()
     elseif mode == "chest" then ns.ChestAction() end
     return true
-  elseif mode == "title" and C.CLASS_ORDER[tonumber(key) or 0] then
-    ns.StartClass(C.CLASS_ORDER[tonumber(key)])
+  elseif mode == "title" and C.VisibleClasses(ns.db)[tonumber(key) or 0] then
+    ns.StartClass(C.VisibleClasses(ns.db)[tonumber(key)])
     return true
   elseif mode == "over" and key == "C" then
     showTitle()

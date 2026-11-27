@@ -25,6 +25,7 @@ local ANIM = {
   -- pets (drawn from the weapon's pets)
   imp      = { rate = 5,  bob = 4,   rot = 0.08, sq = 0.04, hover = true },
   wolf     = { rate = 12, bob = 3,   rot = 0.10, sq = 0.06 },
+  dk_ghoul = { rate = 9,  bob = 3,   rot = 0.16, sq = 0.06 }, -- hunched, lurching run
 }
 local HERO_WALK = { rate = 11, bob = 3.5, rot = 0.1, sq = 0.05 }
 local heroAt = 0
@@ -213,7 +214,8 @@ end
 
 -- glowing sprites are drawn additive; solid ones (knife, shuriken, hammer, shield) normal
 local GLOW = { wrath = true, star = true, slash = true, bolt = true, orb = true,
-  frostbolt = true, fireball = true, arcane = true, blizzard = true, shadowbolt = true, felfire = true, enemybolt = true }
+  frostbolt = true, fireball = true, arcane = true, blizzard = true, shadowbolt = true, felfire = true, enemybolt = true,
+  deathcoil = true, dnd = true, howlingblast = true }
 
 local function projPool(w)
   local d = w.def
@@ -326,6 +328,7 @@ end
 function R.Fx(S, kind, a, b, c, d, e)
   if kind == "nova" then -- x, y, r, weapon
     ring(a, b, c, d.def.color)
+    if d.def.novaSprite then fxSprite(d.def.novaSprite, d.def.color, a, b, a, b, c * 2, math.random() * 6.28, 0.4, 0.7, 1.15) end
   elseif kind == "impact" then
     ring(a, b, c, d.def.color, 0.3)
   elseif kind == "slash" then -- x, y, angle, reach, weapon
@@ -684,7 +687,14 @@ function R.Draw(S, elapsed)
         local t = list[k]
         if not t then
           t = world:CreateTexture(nil, "ARTWORK", nil, 4)
-          if not art(t, d.petSprite) then t:SetTexture(d.icon); t:SetTexCoord(0.08, 0.92, 0.08, 0.92); t.icon = true end
+          if not art(t, d.petSprite) then
+            if d.petAlt and art(t, d.petAlt) then -- stand-in art (the ghoul pet without dk_ghoul.tga), tinted
+              local c = d.petTint or d.color
+              t:SetVertexColor(c[1], c[2], c[3])
+            else
+              t:SetTexture(d.icon); t:SetTexCoord(0.08, 0.92, 0.08, 0.92); t.icon = true
+            end
+          end
           t.at = k
           list[k] = t
         end

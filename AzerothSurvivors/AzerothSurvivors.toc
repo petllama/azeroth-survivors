@@ -8,6 +8,7 @@
 ## IconTexture: Interface\Icons\Spell_Shadow_RaiseDead
 
 Content.lua
+ContentDK.lua
 Sim.lua
 Render.lua
 UI.lua
