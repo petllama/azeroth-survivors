@@ -15,9 +15,13 @@ C.ENEMIES = {
   bat    = { hp = 5,    speed = 92, r = 8,  dmg = 4,  xp = 1,   size = 34 },
   wraith = { hp = 22,   speed = 66, r = 12, dmg = 9,  xp = 2,   size = 44 },
   brute  = { hp = 70,   speed = 38, r = 19, dmg = 14, xp = 5,   size = 66 },
-  elite  = { hp = 450,  speed = 48, r = 24, dmg = 22, xp = 30,  size = 88, elite = true, drop = "potion" },
-  boss   = { hp = 9000, speed = 44, r = 40, dmg = 35, xp = 300, size = 160, boss = true, name = "The Frost Lich" },
+  elite  = { hp = 450,  speed = 48, r = 24, dmg = 22, xp = 30,  size = 88, elite = true, drop = "potion", chest = 1, coins = 4, coinValue = 3 },
+  boss   = { hp = 9000, speed = 44, r = 40, dmg = 35, xp = 300, size = 160, boss = true, name = "The Frost Lich", chest = 3, coins = 16, coinValue = 6 },
 }
+-- gold: any other kill drops a coin worth 1 with this chance (the elite and boss drop piles, see coins above)
+C.COIN_CHANCE = 0.05
+C.MAX_ITEMS = 120 -- coins over this are banked into the next coin that drops
+C.CHEST_GOLD = 25 -- a chest upgrade with nothing left to level gives this much gold
 
 -- spawn weights by time (seconds): first matching row from the bottom whose t <= now
 C.WAVES = {
@@ -268,4 +272,199 @@ C.PLAYER = { magnet = 55, r = 12, iframes = 0.45 } -- hp/speed/armor/crit/regen 
 function C.XpForLevel(level)
   -- about half the old pace: ~level 3 at 1:00, 10 at 2:00, 35-60 by 10:00 depending on the build
   return 5 + (level - 1) * 6 + math.floor((level - 1) ^ 2 * 0.15)
+end
+
+---------------------------------------------------------------------------
+-- Weapon evolutions. A chest evolves `weapon` into `into` when the weapon is at C.MAX_WEAPON_LEVEL and
+-- `passive` is owned (any level). Evolved weapons keep the type, hit harder, have no levels and are
+-- never offered on level-up.
+---------------------------------------------------------------------------
+C.EVOLUTIONS = {
+  { weapon = "crusader",   passive = "might", into = "crusader_evo" },
+  { weapon = "consecrate", passive = "area",  into = "consecrate_evo" },
+  { weapon = "hammers",    passive = "haste", into = "hammers_evo" },
+  { weapon = "avenger",    passive = "crit",  into = "avenger_evo" },
+  { weapon = "dstorm",     passive = "fort",  into = "dstorm_evo" },
+  { weapon = "sinister",   passive = "crit",  into = "sinister_evo" },
+  { weapon = "fan",        passive = "haste", into = "fan_evo" },
+  { weapon = "shuriken",   passive = "area",  into = "shuriken_evo" },
+  { weapon = "flurry",     passive = "swift", into = "flurry_evo" },
+  { weapon = "poison",     passive = "might", into = "poison_evo" },
+  { weapon = "wrath",      passive = "might", into = "wrath_evo" },
+  { weapon = "moonfire",   passive = "regen", into = "moonfire_evo" },
+  { weapon = "starfall",   passive = "area",  into = "starfall_evo" },
+  { weapon = "thorns",     passive = "armor", into = "thorns_evo" },
+  { weapon = "roots",      passive = "magnet", into = "roots_evo" },
+}
+
+local EVO = {
+  ------------------------------------------------------------------ paladin
+  crusader_evo = {
+    type = "melee", name = "Templar's Verdict", icon = "Interface\\Icons\\Spell_Paladin_TemplarsVerdict",
+    desc = "Evolved Crusader Strike: a holy blow all around you.", color = { 1, 0.95, 0.55 },
+    base = { dmg = 48, cd = 0.6, range = 150, arc = 1, knock = 220 },
+  },
+  consecrate_evo = {
+    type = "aura", name = "Hallowed Ground", icon = "Interface\\Icons\\Spell_Paladin_DivineCircle",
+    desc = "Evolved Consecration: wide holy ground that sears.", color = { 1, 0.85, 0.35 },
+    base = { dmg = 14, radius = 135, tick = 0.3 },
+  },
+  hammers_evo = {
+    type = "orbit", name = "Hammer of the Righteous", icon = "Interface\\Icons\\Ability_Paladin_HammeroftheRighteous",
+    desc = "Evolved Blessed Hammers: a ring of eight heavy hammers.", sprite = "hammer", spinSprite = true, color = { 1, 0.9, 0.5 },
+    base = { dmg = 24, count = 8, radius = 110, spin = 4.5, hitcd = 0.4, size = 34 },
+  },
+  avenger_evo = {
+    type = "chain", name = "Holy Avenger", icon = "Interface\\Icons\\Ability_Paladin_HolyAvenger",
+    desc = "Evolved Avenger's Shield: bounces through a whole pack.", sprite = "shield", color = { 1, 0.95, 0.5 },
+    base = { dmg = 60, cd = 1.3, jumps = 10, range = 220 },
+  },
+  dstorm_evo = {
+    type = "nova", name = "Avenging Storm", icon = "Interface\\Icons\\Spell_Holy_AvengineWrath",
+    desc = "Evolved Divine Storm: bigger, faster and heals more.", color = { 1, 0.95, 0.6 },
+    base = { dmg = 50, cd = 2.0, radius = 185, slow = 0, heal = 1.5, healCap = 20 },
+  },
+  ------------------------------------------------------------------ rogue
+  sinister_evo = {
+    type = "melee", name = "Eviscerate", icon = "Interface\\Icons\\Ability_Rogue_Eviscerate",
+    desc = "Evolved Sinister Strike: wide double cuts.", color = { 1, 0.6, 0.6 },
+    base = { dmg = 26, cd = 0.3, range = 115, arc = 0.75, knock = 90, double = 1 },
+  },
+  fan_evo = {
+    type = "burst", name = "Blade Dance", icon = "Interface\\Icons\\Ability_Warrior_Bladestorm",
+    desc = "Evolved Fan of Knives: a storm of piercing knives.", sprite = "knife", color = { 0.9, 0.9, 1 },
+    base = { dmg = 20, cd = 1.0, count = 24, speed = 460, pierce = 4, life = 0.9, size = 30 },
+  },
+  shuriken_evo = {
+    type = "proj", name = "Shuriken Storm", icon = "Interface\\Icons\\Ability_Rogue_ShurikenStorm",
+    desc = "Evolved Shuriken Toss: five huge stars that cut through everything.", sprite = "shuriken", spinSprite = true,
+    color = { 0.85, 0.9, 1 },
+    base = { dmg = 34, cd = 0.7, count = 5, speed = 560, pierce = 20, life = 1.4, size = 32 },
+  },
+  flurry_evo = {
+    type = "orbit", name = "Killing Spree", icon = "Interface\\Icons\\Ability_Rogue_MurderSpree",
+    desc = "Evolved Blade Flurry: eight blades, wider and faster.", sprite = "knife", spinSprite = true, color = { 1, 0.85, 0.85 },
+    base = { dmg = 17, count = 8, radius = 70, spin = 10, hitcd = 0.22, size = 30 },
+  },
+  poison_evo = {
+    type = "poison", name = "Deadly Brew", icon = "Interface\\Icons\\Ability_Rogue_DeadlyBrew",
+    desc = "Evolved Deadly Poison: a far stronger, longer poison.", color = { 0.4, 1, 0.3 },
+    base = { dps = 26, dur = 5 },
+  },
+  ------------------------------------------------------------------ druid
+  wrath_evo = {
+    type = "proj", name = "Starsurge", icon = "Interface\\Icons\\Spell_Arcane_Arcane03",
+    desc = "Evolved Wrath: five piercing star bolts.", sprite = "wrath", color = { 0.8, 0.6, 1 },
+    base = { dmg = 28, cd = 0.5, count = 5, speed = 480, pierce = 3, life = 1.5, size = 26 },
+  },
+  moonfire_evo = {
+    type = "strike", name = "Sunfire", icon = "Interface\\Icons\\Ability_Mage_FireStarter",
+    desc = "Evolved Moonfire: solar beams on a dozen enemies, burning hot.", color = { 1, 0.7, 0.3 },
+    base = { dmg = 22, cd = 1.0, count = 12, radius = 0, delay = 0, dot = 17, dotDur = 4 },
+  },
+  starfall_evo = {
+    type = "strike", name = "Celestial Alignment", icon = "Interface\\Icons\\Ability_Druid_Eclipse",
+    desc = "Evolved Starfall: a constant rain of big stars.", sprite = "star", color = { 0.9, 0.75, 1 },
+    base = { dmg = 46, cd = 1.6, count = 12, radius = 80, delay = 0.4 },
+  },
+  thorns_evo = {
+    type = "aura", name = "Brambles", icon = "Interface\\Icons\\Spell_Nature_NatureGuardian",
+    desc = "Evolved Thorns: a wide thicket that tears attackers apart.", color = { 0.5, 1, 0.3 },
+    base = { dmg = 11, radius = 110, tick = 0.3, reflect = 90 },
+  },
+  roots_evo = {
+    type = "nova", name = "Ursol's Vortex", icon = "Interface\\Icons\\Spell_Druid_UrsolsVortex",
+    desc = "Evolved Entangling Roots: a huge snare that holds longer.", color = { 0.5, 1, 0.5 },
+    base = { dmg = 24, cd = 3.0, radius = 230, slow = 4.5, root = 1 },
+  },
+}
+for id, d in pairs(EVO) do d.evolved = true; d.levels = {}; C.WEAPONS[id] = d end
+
+---------------------------------------------------------------------------
+-- Meta shop: permanent upgrades bought with banked gold. cost(rank) = floor(cost * grow ^ rank).
+-- Sim.New({ meta = { might = 2, ... } }) applies the ranks.
+---------------------------------------------------------------------------
+C.SHOP = {
+  { id = "might",    name = "Might",     icon = "Interface\\Icons\\Spell_Nature_Strength",    text = "+5% damage",            max = 5, cost = 60,  grow = 1.6 },
+  { id = "armor",    name = "Armor",     icon = "Interface\\Icons\\Spell_Holy_DevotionAura",  text = "-1 damage taken",       max = 3, cost = 120, grow = 1.9 },
+  { id = "maxhp",    name = "Max HP",    icon = "Interface\\Icons\\Spell_Holy_WordFortitude", text = "+10% max health",       max = 5, cost = 60,  grow = 1.6 },
+  { id = "recovery", name = "Recovery",  icon = "Interface\\Icons\\Spell_Holy_Renew",         text = "+0.2 health / sec",     max = 5, cost = 60,  grow = 1.6 },
+  { id = "swift",    name = "Swiftness", icon = "Interface\\Icons\\Ability_Rogue_Sprint",     text = "+5% move speed",        max = 3, cost = 80,  grow = 1.7 },
+  { id = "greed",    name = "Greed",     icon = "Interface\\Icons\\INV_Misc_Coin_01",         text = "+20% pickup range",     max = 3, cost = 50,  grow = 1.6 },
+  { id = "growth",   name = "Growth",    icon = "Interface\\Icons\\Spell_Holy_BorrowedTime",  text = "+5% experience",        max = 5, cost = 80,  grow = 1.6 },
+  { id = "reroll",   name = "Reroll",    icon = "Interface\\Icons\\INV_Misc_Dice_01",         text = "+1 reroll per run (R)", max = 3, cost = 100, grow = 1.8 },
+  { id = "skip",     name = "Skip",      icon = "Interface\\Icons\\Spell_Nature_TimeStop",    text = "+1 skip per run (S)",   max = 3, cost = 60,  grow = 1.8 },
+  { id = "insight",  name = "Insight",   icon = "Interface\\Icons\\INV_Misc_Book_09",         text = "4 cards on level-up",   max = 1, cost = 600, grow = 1 },
+}
+C.SHOP_BY_ID = {}
+for _, s in ipairs(C.SHOP) do C.SHOP_BY_ID[s.id] = s end
+
+function C.ShopCost(id, rank)
+  local s = C.SHOP_BY_ID[id]
+  if not s or rank >= s.max then return nil end
+  return math.floor(s.cost * s.grow ^ rank)
+end
+
+---------------------------------------------------------------------------
+-- Curses: optional, stacking difficulty. Each active curse adds +25% XP and +50% gold.
+---------------------------------------------------------------------------
+C.CURSES = {
+  { id = "horde",  name = "Horde",  icon = "Interface\\Icons\\Spell_Shadow_UnholyFrenzy",      text = "+50% spawn rate",   spawn = 1.5 },
+  { id = "brutal", name = "Brutal", icon = "Interface\\Icons\\Spell_Shadow_CurseOfMannoroth",  text = "+60% enemy health", hp = 1.6 },
+  { id = "haste",  name = "Haste",  icon = "Interface\\Icons\\Spell_Shadow_CurseOfAchimonde",  text = "+25% enemy speed",  speed = 1.25 },
+  { id = "frail",  name = "Frail",  icon = "Interface\\Icons\\Ability_Creature_Cursed_02",     text = "-30% max health",   maxhp = 0.7 },
+}
+C.CURSE_XP, C.CURSE_GOLD = 0.25, 0.5
+
+-- XP and gold multipliers for a curse set ({ horde = true, ... })
+function C.CurseMult(curses)
+  local n = 0
+  for _, c in ipairs(C.CURSES) do if curses and curses[c.id] then n = n + 1 end end
+  return 1 + n * C.CURSE_XP, 1 + n * C.CURSE_GOLD, n
+end
+
+---------------------------------------------------------------------------
+-- Achievements. check(sum) is a pure function of the run summary:
+--   { class, t, won, kills, level, bossKilled, evolved, curses (count), gold, have = { [id] = true } }
+-- `have` already holds the achievements earned before (and earlier in the same pass).
+-- unlock: "reroll" (+1 reroll per run), "slot" (6th weapon slot), "title" (class screen title).
+---------------------------------------------------------------------------
+C.ACHIEVEMENTS = {
+  { id = "survive5",  name = "Still Standing",    icon = "Interface\\Icons\\Spell_Holy_BorrowedTime",       desc = "Survive 5 minutes.",
+    check = function(s) return s.t >= 300 end },
+  { id = "survive10", name = "Survivor",          icon = "Interface\\Icons\\Achievement_General",           desc = "Survive 10 minutes.",
+    check = function(s) return s.t >= 600 end },
+  { id = "rogue10",   name = "Shadow of Azeroth", icon = "Interface\\Icons\\ClassIcon_Rogue",               desc = "Survive 10 minutes as a Rogue.",
+    unlock = "reroll", unlockText = "Unlocks +1 Reroll every run",
+    check = function(s) return s.class == "rogue" and s.t >= 600 end },
+  { id = "win_paladin", name = "Light's Champion", icon = "Interface\\Icons\\ClassIcon_Paladin",          desc = "Win as a Paladin.",
+    check = function(s) return s.won and s.class == "paladin" end },
+  { id = "win_rogue", name = "Untouchable",       icon = "Interface\\Icons\\Ability_Rogue_Eviscerate",     desc = "Win as a Rogue.",
+    check = function(s) return s.won and s.class == "rogue" end },
+  { id = "win_druid", name = "Keeper of the Grove", icon = "Interface\\Icons\\ClassIcon_Druid",            desc = "Win as a Druid.",
+    check = function(s) return s.won and s.class == "druid" end },
+  { id = "boss",      name = "Lich Slayer",       icon = "Interface\\Icons\\Achievement_Boss_LichKing",     desc = "Kill The Frost Lich.",
+    check = function(s) return s.bossKilled end },
+  { id = "kills1000", name = "Thousand Cuts",     icon = "Interface\\Icons\\Achievement_BG_KillXEnemies_GeneralsRoom", desc = "Kill 1000 enemies in one run.",
+    check = function(s) return s.kills >= 1000 end },
+  { id = "evolve",    name = "Evolution",         icon = "Interface\\Icons\\Spell_Holy_SummonChampion",     desc = "Evolve a weapon.",
+    unlock = "slot", unlockText = "Unlocks a 6th weapon slot (any class's skills)",
+    check = function(s) return (s.evolved or 0) >= 1 end },
+  { id = "cursed",    name = "Glutton for Punishment", icon = "Interface\\Icons\\Spell_Shadow_CurseOfMannoroth", desc = "Win with 2 or more curses.",
+    check = function(s) return s.won and (s.curses or 0) >= 2 end },
+  { id = "allclasses", name = "Champion of Azeroth", icon = "Interface\\Icons\\Achievement_Arena_2v2_7",   desc = "Win with every base class.",
+    unlock = "title", unlockText = "Unlocks the title Champion of Azeroth",
+    check = function(s) local h = s.have return h.win_paladin and h.win_rogue and h.win_druid end },
+}
+C.TITLE = "Champion of Azeroth"
+
+-- Bonuses from earned achievements ({ [id] = anything truthy }): { reroll = n, slot = n, title = bool }
+function C.UnlockBonus(ach)
+  local b = { reroll = 0, slot = 0, title = false }
+  for _, a in ipairs(C.ACHIEVEMENTS) do
+    if ach and ach[a.id] and a.unlock then
+      if a.unlock == "title" then b.title = true else b[a.unlock] = b[a.unlock] + 1 end
+    end
+  end
+  return b
 end

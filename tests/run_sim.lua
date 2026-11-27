@@ -14,7 +14,13 @@ if os.getenv("VACUUM") then C.PLAYER.magnet = 3000 end
 math.randomseed(seed)
 
 local KEEP = (class == "druid") and 130 or 75 -- melee classes fight up close
-local S = Sim.New({ class = class, viewR = 560, stress = mode == "stress", cap = mode == "stress" and cap or nil })
+-- META=max buys every shop rank; META=might:3,armor:1 picks ranks. CURSES=horde,brutal turns curses on.
+local meta, curses = {}, {}
+local mv = os.getenv("META")
+if mv == "max" then for _, s in ipairs(C.SHOP) do meta[s.id] = s.max end
+elseif mv then for k, v in mv:gmatch("(%w+):(%d+)") do meta[k] = tonumber(v) end end
+for c in (os.getenv("CURSES") or ""):gmatch("%w+") do curses[c] = true end
+local S = Sim.New({ class = class, viewR = 560, stress = mode == "stress", cap = mode == "stress" and cap or nil, meta = meta, curses = curses })
 local dt = 1 / 60
 local clock = os.clock
 local worst, total, steps = 0, 0, 0
@@ -38,14 +44,27 @@ local function bot()
     local d2 = dx * dx + dy * dy
     if d2 < gd then gx, gy, gd = dx, dy, d2 end
   end
-  if gd < math.huge then local d = math.sqrt(gd) + 1; gx, gy = gx / d * 1.0, gy / d * 1.0 end
+  -- chests and coins too (a player walks to a chest)
+  for i = 1, S.nI do
+    local it = S.items[i]
+    if it.kind ~= "potion" then
+      local dx, dy = it.x - p.x, it.y - p.y
+      local r2 = dx * dx + dy * dy
+      local d2 = r2 * (it.kind == "chest" and 0.1 or 1)
+      if r2 < 400 * 400 and d2 < gd then gx, gy, gd = dx, dy, d2 end -- only what is on screen
+    end
+  end
+  if gd < math.huge then local d = math.sqrt(gx * gx + gy * gy) + 1; gx, gy = gx / d * 1.0, gy / d * 1.0 end
   local t = S.t * 0.25
   return ax * 2500 + gx + math.cos(t) * 0.2, ay * 900 + gy + math.sin(t) * 0.2
 end
 
 local limit = mode == "stress" and 60 or C.RUN_SECONDS + 5
 while S.t < limit and S.state ~= "dead" and S.state ~= "won" do
-  if S.state == "levelup" then
+  if S.state == "chest" then
+    Sim.OpenChest(S)
+    Sim.CloseChest(S)
+  elseif S.state == "levelup" then
     Sim.Choose(S, math.random(#S.choices))
   else
     local ix, iy = bot()
@@ -67,6 +86,12 @@ print(string.format(class .. " %s seed=%d result=%s t=%.0fs level=%d kills=%d hp
   mode, seed, S.state, S.t, S.p.level, S.kills, S.p.hp, S.p.maxhp, maxE, S.nG))
 local killer = S.lastHit and S.lastHit.kind or "-"
 print("  level by minute: " .. table.concat(marks, " "))
-print("  last hit by: " .. killer .. "   boss " .. (S.bossKilled and "killed" or (S.bossSpawned and "alive" or "not spawned")))
+print("  last hit by: " .. killer .. "   boss " .. (S.bossKilled and ("killed at " .. math.floor(S.bossKilledAt or 0)) or (S.bossSpawned and "alive" or "not spawned")))
+local dmg = {}
+for k, v in pairs(S.dmgBy) do dmg[#dmg + 1] = { k, v } end
+table.sort(dmg, function(a, b) return a[2] > b[2] end)
+local dl = {}
+for i, e in ipairs(dmg) do dl[i] = string.format("%s %.0f%%", e[1], e[2] * 100 / math.max(1, S.dmgDone)) end
+print(string.format("  gold %d  chests %d  evolved %d  damage: %s", S.gold, S.chests or 0, S.nEvolved, table.concat(dl, " ")))
 print("  weapons: " .. table.concat(weapons, " ") .. "   passives: " .. table.concat(passives, " "))
 print(string.format("  step ms: avg %.3f worst %.3f  (%s, lua mem %.0f KB)", total / steps, worst, _VERSION, collectgarbage("count")))

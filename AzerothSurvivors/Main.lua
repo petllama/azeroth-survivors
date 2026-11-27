@@ -2,7 +2,8 @@
 local addonName, ns = ...
 local C, Sim, R, UI = ns.Content, ns.Sim, ns.Render, ns.UI
 
-local DEFAULTS = { anim = true, numbers = true, debug = false, scale = 1, runs = 0, class = "paladin", flightOffer = true }
+local DEFAULTS = { anim = true, numbers = true, debug = false, scale = 1, runs = 0, class = "paladin", flightOffer = true, sound = true, gold = 0 }
+local TABLES = { "meta", "curses", "ach", "guild" } -- db.meta = shop ranks, db.curses = active curses, db.ach = earned, db.guild = board
 local frame, S
 local mode = "title" -- title | play | levelup | pause | over
 local stressCap
@@ -22,6 +23,37 @@ function ns.PlaySound(id)
   pcall(PlaySound, id, "SFX")
 end
 
+---------------------------------------------------------------------------
+-- sound: WoW's built-in SOUNDKIT entries (no files shipped), throttled per name
+---------------------------------------------------------------------------
+local SFX = {
+  levelup  = { "UI_GARRISON_COMMAND_TABLE_FOLLOWER_LEVEL_UP", 46893 },
+  chest    = { "UI_GARRISON_COMMAND_TABLE_CHEST_UNLOCK_GOLD_SUCCESS", 44332 },
+  evolve   = { "UI_70_ARTIFACT_FORGE_TRAIT_GOLD_TRAIT", 54125 },
+  coin     = { "LOOT_WINDOW_COIN_SOUND", 120, max = 1, window = 0.12 },
+  hit      = { "IG_CREATURE_AGGRO_SELECT", 873, max = 1, window = 0.35 },
+  boss     = { "RAID_WARNING", 8959 },
+  death    = { "UI_GARRISON_MISSION_COMPLETE_MISSION_FAIL_STINGER", 43503 },
+  victory  = { "LFG_REWARDS", 17316 },
+  ach      = { "UI_EPICLOOT_TOAST", 31578 },
+  buy      = { "UI_GARRISON_ARCHITECT_TABLE_UPGRADE", 44302 },
+  click    = { "IG_MAINMENU_OPTION_CHECKBOX_ON", 856 },
+}
+ns.SFX = SFX
+local sfxT, sfxN = {}, {}
+-- at most `max` (default 2) plays per `window` (default 0.1 s) per name
+function ns.Sfx(name)
+  local d = SFX[name]
+  if not d or not ns.db or not ns.db.sound then return false end
+  local now = GetTime()
+  if not sfxT[name] or now - sfxT[name] >= (d.window or 0.1) then sfxT[name], sfxN[name] = now, 0 end
+  if sfxN[name] >= (d.max or 2) then return false end
+  sfxN[name] = sfxN[name] + 1
+  local id = (SOUNDKIT and SOUNDKIT[d[1]]) or d[2]
+  pcall(PlaySound, id)
+  return true
+end
+
 local function viewR()
   local w, h = frame:GetSize()
   return math.sqrt(w * w + h * h) / 2
@@ -31,31 +63,106 @@ local hooks = {
   release = R.Release,
   number = R.Number,
   fx = R.Fx,
-  hurt = function() R.Hurt() end,
+  hurt = function() R.Hurt(); ns.Sfx("hit") end,
   heal = R.Heal,
   kill = R.Kill,
+  pickup = function(_, kind) if kind == "coin" then ns.Sfx("coin") end end,
   levelup = function(s)
     mode = "levelup"
     UI.LevelUp(s)
-    ns.PlaySound(888) -- level up
+    ns.Sfx("levelup")
+  end,
+  chest = function(s)
+    mode = "chest"
+    UI.Chest(s)
+  end,
+  evolve = function(s, w)
+    R.Fx(s, "evolve", w)
+    UI.Banner(w.def.name .. "!", 1, 0.82, 0)
+    ns.Sfx("evolve")
   end,
   over = function(s, won)
     mode = "over"
     local db = ns.db
-    db.runs = (db.runs or 0) + 1
-    db.bestByClass = db.bestByClass or {}
-    local b = db.bestByClass[s.class]
-    local newBest = not s.stress and (not b or (won and not b.won) or (won == (b.won or false) and s.t > b.t))
-    if newBest then db.bestByClass[s.class] = { t = s.t, level = s.p.level, kills = s.kills, won = won } end
-    UI.Over(s, won, newBest)
-    ns.PlaySound(won and 888 or 8959)
+    local res = { gold = 0 }
+    if not s.stress then
+      db.runs = (db.runs or 0) + 1
+      db.bestByClass = db.bestByClass or {}
+      local b = db.bestByClass[s.class]
+      res.newBest = not b or (won and not b.won) or (won == (b.won or false) and s.t > b.t)
+      if res.newBest then db.bestByClass[s.class] = { t = s.t, level = s.p.level, kills = s.kills, won = won } end
+      -- bank the run's gold
+      res.gold = math.floor(s.gold or 0)
+      db.gold = (db.gold or 0) + res.gold
+      res.ach = ns.CheckAchievements(s, won)
+      ns.Social.OnRunEnd(s, won)
+    end
+    UI.Over(s, won, res)
+    ns.Sfx(won and "victory" or "death")
   end,
 }
+
+---------------------------------------------------------------------------
+-- achievements (data and pure checks in Content: C.ACHIEVEMENTS)
+---------------------------------------------------------------------------
+local function countCurses(curses) local _, _, n = C.CurseMult(curses) return n end
+
+function ns.RunSummary(s, won)
+  local have = {}
+  for k in pairs(ns.db.ach) do have[k] = true end
+  return { class = s.class, t = s.t, won = won and true or false, kills = s.kills, level = s.p.level,
+    bossKilled = s.bossKilled and true or false, evolved = s.nEvolved or 0, curses = countCurses(s.curses),
+    gold = s.gold or 0, have = have }
+end
+
+-- award every achievement whose check passes; returns the new ones
+function ns.CheckAchievements(s, won)
+  if not s or s.stress then return {} end
+  local sum = ns.RunSummary(s, won)
+  local new = {}
+  for _, a in ipairs(C.ACHIEVEMENTS) do
+    if not ns.db.ach[a.id] then
+      local ok, got = pcall(a.check, sum)
+      if ok and got then
+        ns.db.ach[a.id] = time and time() or true
+        sum.have[a.id] = true
+        new[#new + 1] = a
+        UI.Toast(a)
+      end
+    end
+  end
+  if #new > 0 then ns.Sfx("ach") end
+  return new
+end
+
+---------------------------------------------------------------------------
+-- shop and curses (class screen)
+---------------------------------------------------------------------------
+function ns.Buy(id)
+  local db = ns.db
+  local rank = db.meta[id] or 0
+  local cost = C.ShopCost(id, rank)
+  if not cost or (db.gold or 0) < cost then return false end
+  db.gold = db.gold - cost
+  db.meta[id] = rank + 1
+  ns.Sfx("buy")
+  return true
+end
+
+function ns.ToggleCurse(id)
+  ns.db.curses[id] = not ns.db.curses[id] or nil
+  ns.Sfx("click")
+  return ns.db.curses[id] and true or false
+end
 
 local function startRun()
   if S then R.ReleaseAll(S) end
   local cls = C.CLASSES[ns.db.class] and ns.db.class or "paladin"
-  S = Sim.New({ class = cls, viewR = viewR(), hooks = hooks, stress = stressCap and true or nil, cap = stressCap })
+  local stress = stressCap and true or nil
+  S = Sim.New({ class = cls, viewR = viewR(), hooks = hooks, stress = stress, cap = stressCap,
+    meta = not stress and ns.db.meta or nil, curses = not stress and ns.db.curses or nil,
+    unlocks = not stress and C.UnlockBonus(ns.db.ach) or nil })
+  S.achT = 0
   R.SetClass(C.CLASSES[cls])
   UI.HideBoss()
   UI.Show(nil)
@@ -75,8 +182,8 @@ end
 -- quick save / load (one slot, in SavedVariables: survives /reload and logout)
 ---------------------------------------------------------------------------
 local function runActive()
-  return S and not S.stress and (S.state == "play" or S.state == "levelup")
-    and (mode == "play" or mode == "pause" or mode == "levelup")
+  return S and not S.stress and (S.state == "play" or S.state == "levelup" or S.state == "chest")
+    and (mode == "play" or mode == "pause" or mode == "levelup" or mode == "chest")
 end
 
 local function saveRun()
@@ -98,9 +205,13 @@ local function loadRun()
   stressCap = nil
   R.SetClass(C.CLASSES[S.class])
   UI.HideBoss()
+  S.achT = 0
   if S.state == "levelup" then
     mode = "levelup"
     UI.LevelUp(S)
+  elseif S.state == "chest" then
+    mode = "chest"
+    UI.Chest(S)
   else
     mode = "play"
     pause("|cff00ff00Saved run loaded.|r  |cffffd100P|r or |cffffd100ESC|r to play.")
@@ -134,13 +245,43 @@ local function showTitle()
   UI.TitleBest(ns.db, ns.db.class)
   UI.Show("title")
 end
+ns.ShowTitle = showTitle
 
-function ns.Choose(i)
-  if mode ~= "levelup" or not S then return end
-  if Sim.Choose(S, i) and S.state == "play" then
+-- after a level-up pick / skip / chest: back to play (unless another level-up opened)
+local function resumePlay()
+  if S.state == "play" then
     mode = "play"
     UI.Show(nil)
     if InCombatLockdown() then pause("|cffff4040You are in combat!|r  The game resumes control after combat.") end
+  end
+end
+
+function ns.Choose(i)
+  if mode ~= "levelup" or not S then return end
+  if Sim.Choose(S, i) then resumePlay() end
+end
+
+function ns.Reroll()
+  if mode ~= "levelup" or not S then return false end
+  return Sim.Reroll(S)
+end
+
+function ns.Skip()
+  if mode ~= "levelup" or not S then return false end
+  if Sim.Skip(S) then resumePlay() return true end
+  return false
+end
+
+-- chest screen: first press opens (upgrades applied, revealed one by one), the next closes
+function ns.ChestAction()
+  if mode ~= "chest" or not S then return end
+  if S.chestN > 0 then
+    local list = Sim.OpenChest(S)
+    UI.ChestOpened(S, list)
+    ns.Sfx("chest")
+  elseif not UI.ChestRevealAll() then
+    Sim.CloseChest(S)
+    resumePlay()
   end
 end
 
@@ -182,6 +323,8 @@ AzerothSurvivorsAPI = {
 
 -- returns true when the key is ours (not passed on to the game's bindings)
 local function onKey(key, down)
+  if down and mode == "levelup" and key == "S" then ns.Skip() return true end
+  if down and mode == "title" and key == "ESCAPE" and UI.SubOpen() then UI.ShowSub(nil) return true end
   if MOVE[key] then
     return mode == "play" -- movement is polled with IsKeyDown; outside play the character may walk
   end
@@ -200,8 +343,9 @@ local function onKey(key, down)
     elseif mode == "pause" then resume()
     else close() end -- title, over, levelup (the level-up waits for reopening)
     return true
-  elseif key == "SPACE" then
-    if mode == "title" or mode == "over" then startRun() end
+  elseif key == "SPACE" or (mode == "chest" and (key == "ENTER" or key == "1")) then
+    if mode == "title" or mode == "over" then startRun()
+    elseif mode == "chest" then ns.ChestAction() end
     return true
   elseif mode == "title" and C.CLASS_ORDER[tonumber(key) or 0] then
     ns.StartClass(C.CLASS_ORDER[tonumber(key)])
@@ -209,8 +353,11 @@ local function onKey(key, down)
   elseif mode == "over" and key == "C" then
     showTitle()
     return true
-  elseif mode == "levelup" and (key == "1" or key == "2" or key == "3") then
+  elseif mode == "levelup" and (key == "1" or key == "2" or key == "3" or key == "4") then
     ns.Choose(tonumber(key))
+    return true
+  elseif mode == "levelup" and key == "R" then
+    ns.Reroll()
     return true
   elseif mode == "pause" and key == "Q" then
     S.state = "dead"
@@ -234,9 +381,12 @@ local function onUpdate(_, elapsed)
       iy = (held("W", "UP") and 1 or 0) - (held("S", "DOWN") and 1 or 0)
     end
     Sim.Step(S, elapsed, ix, iy)
+    -- live achievements (survive 5 min, 1000 kills...) once a second
+    S.achT = (S.achT or 0) + elapsed
+    if S.achT >= 1 and S.state == "play" then S.achT = 0; ns.CheckAchievements(S, false) end
   end
   local t1 = debugprofilestop()
-  if mode == "play" or mode == "levelup" or S.state == "play" then
+  if mode == "play" or mode == "levelup" or mode == "chest" or S.state == "play" then
     R.Draw(S, mode == "play" and elapsed or 0)
   end
   local t2 = debugprofilestop()
@@ -344,8 +494,10 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     AzerothSurvivorsDB = AzerothSurvivorsDB or {}
     ns.db = AzerothSurvivorsDB
     for k, v in pairs(DEFAULTS) do if ns.db[k] == nil then ns.db[k] = v end end
+    for _, k in ipairs(TABLES) do if type(ns.db[k]) ~= "table" then ns.db[k] = {} end end
     build()
     ns.Flight.Init()
+    ns.Social.Init()
   elseif event == "PLAYER_LOGOUT" then
     saveRun() -- a run in progress comes back with F9 / Continue
   elseif event == "PLAYER_REGEN_DISABLED" and frame then
@@ -389,6 +541,11 @@ SlashCmdList.AZEROTHSURVIVORS = function(msg)
     ns.db.debug = true
     frame:Show()
     startRun()
+  elseif cmd == "sound" then
+    ns.db.sound = not ns.db.sound
+    P("sound " .. (ns.db.sound and "on" or "off"))
+  elseif cmd == "board" then
+    ns.Social.PrintBoard()
   elseif cmd == "flight" then
     ns.db.flightOffer = not ns.db.flightOffer
     P("offer to play on flights " .. (ns.db.flightOffer and "on" or "off"))
@@ -402,7 +559,7 @@ SlashCmdList.AZEROTHSURVIVORS = function(msg)
     frame:SetPoint("CENTER")
     P("window position reset")
   else
-    P("/azs  open/close   /azs stress N  stress test with N enemies   /azs debug  fps overlay   /azs anim  animations on/off   /azs numbers  damage numbers   /azs flight  offer to play on flights   /azs save | load  quick save / load   /azs scale 0.8   /azs reset")
+    P("/azs  open/close   /azs stress N  stress test with N enemies   /azs debug  fps overlay   /azs anim  animations on/off   /azs numbers  damage numbers   /azs sound  sound on/off   /azs board  guild leaderboard   /azs flight  offer to play on flights   /azs save | load  quick save / load   /azs scale 0.8   /azs reset")
   end
 end
 
