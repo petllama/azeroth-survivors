@@ -272,24 +272,22 @@ do
   for _ = 1, 60 do tick(dt) end
   local _, mF = ns.State()
   if mF == "title" or mF == "over" then key("2", true) ; if select(2, ns.State()) ~= "play" then key("SPACE", true) end end
-  -- fly until 10 s before landing
+  -- an estimate runs out but the flight goes on (UC -> Tarren Mill: estimate a minute short): stays open
   local guard = 0
-  while (F.SecondsLeft() or 0) > 9.5 and guard < 60 * 600 do
+  while (F.SecondsLeft() or 0) > -60 and guard < 60 * 900 do
     tick(dt); guard = guard + 1
     if select(2, ns.State()) == "levelup" then key("1", true) end
   end
-  for _ = 1, 40 do tick(dt) end
-  assert(not frame._shown, "game should be put away 10 s before landing")
-  assert(raidMsgs[1] == "Landing in 10 seconds", "landing banner missing: " .. tostring(raidMsgs[1]))
-  assert(ns.db.save, "landing should save")
-  -- land
-  for _ = 1, 60 * 12 do tick(dt) end
+  assert(frame._shown, "an estimate must not close the game before the real landing")
+  assert(#raidMsgs == 0, "no landing banner on an estimate")
+  ns.db.save = nil
   _G.__onTaxi = false
   fireAll("PLAYER_CONTROL_GAINED")
   for _ = 1, 60 do tick(dt) end
   local fl = F.State()
   assert(not fl, "flight should be over")
-  local learned = ns.db.flightTimes and ns.db.flightTimes["Stormwind, Elwynn -> Ironforge, Dun Morogh"]
+  assert(not frame._shown and ns.db.save, "landing puts the game away and saves it")
+  local learned = ns.db.flightTimes and ns.db.flightTimes["stormwind, elwynn>ironforge, dun morogh"]
   assert(learned, "flight time should be learned")
   -- second flight: learned time, Not now -> row, Don't ask again turns the offer off
   TakeTaxiNode(2); _G.__onTaxi = true; fireAll("PLAYER_CONTROL_LOST")
@@ -298,6 +296,34 @@ do
   assert(card._shown and card.mode == "ask", "second flight asks again")
   card.Ask.Later:Click()
   assert(card._shown and card.mode == "row", "Not now leaves the Play row")
+  -- recorded time: put away 10 s before landing
+  card.Row:Click()
+  assert(frame._shown, "row opens the game")
+  local _, mR = ns.State()
+  if mR == "pause" then key("P", true) elseif mR == "title" or mR == "over" then key("SPACE", true) end
+  local g2 = 0
+  while (F.SecondsLeft() or 0) > 9.5 and g2 < 60 * 900 do
+    tick(dt); g2 = g2 + 1
+    if select(2, ns.State()) == "levelup" then key("1", true) end
+  end
+  for _ = 1, 40 do tick(dt) end
+  assert(not frame._shown, "a recorded time puts the game away 10 s before landing")
+  assert(raidMsgs[1] == "Landing in 10 seconds", "landing banner missing: " .. tostring(raidMsgs[1]))
+  _G.__onTaxi = false; fireAll("PLAYER_CONTROL_GAINED")
+  for _ = 1, 60 do tick(dt) end
+  -- Polestar's recording is used when we have none (node IDs from C_TaxiMap)
+  C_TaxiMap = { GetAllTaxiNodes = function() return { { slotIndex = 1, nodeID = 11, name = "Undercity, Tirisfal" }, { slotIndex = 2, nodeID = 13, name = "Tarren Mill, Hillsbrad" } } end }
+  PolestarCharDB = { flightTimes = { ["11>13"] = 141 } }
+  TakeTaxiNode(2); _G.__onTaxi = true; fireAll("PLAYER_CONTROL_LOST")
+  for _ = 1, 60 do tick(dt) end
+  local leftP, srcP = F.SecondsLeft()
+  assert(srcP == "polestar" and math.abs(leftP - 140) < 2, "Polestar's 141 s should be used, got " .. tostring(srcP) .. " " .. tostring(leftP))
+  card.Ask.Later:Click()
+  _G.__onTaxi = false; fireAll("PLAYER_CONTROL_GAINED")
+  for _ = 1, 60 do tick(dt) end
+  C_TaxiMap, PolestarCharDB = nil, nil
+  TakeTaxiNode(2); _G.__onTaxi = true; fireAll("PLAYER_CONTROL_LOST")
+  for _ = 1, 60 do tick(dt) end
   -- a fight on the way with the game open: saved, paused, closed
   card.Row:Click()
   assert(frame._shown, "row opens the game")
@@ -313,7 +339,7 @@ do
   _G.__onTaxi = false; fireAll("PLAYER_CONTROL_GAINED")
   for _ = 1, 60 do tick(dt) end
   ns.db.flightOffer = true
-  print(string.format("flight ok: estimate, card, play, landing guard, learned %ds, not now, fight, don't ask again", learned))
+  print(string.format("flight ok: estimate stays open to landing, card, play, learned %ds, recorded time closes 10 s early, Polestar's time, not now, fight, don't ask again", learned))
 end
 try(SlashCmdList.AZEROTHSURVIVORS, "stress 600")
 for _ = 1, 600 do tick(dt) end

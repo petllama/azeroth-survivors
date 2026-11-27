@@ -9,10 +9,12 @@
 -- still open; a chat line says how to go on. Opening the game on a flight by any means starts the
 -- landing guard. The card sits under Polestar's flight timer (or its Doom card) when those are shown.
 --
--- Flight time: this account's own recording of that exact from -> to flight when there is one
--- (db.flightTimes, learned on every landing), else an estimate from the taxi map: straight-line
--- distance x PATH at gryphon speed. No estimate possible: the time is unknown and, as in Polestar, no
--- card is offered on that flight; the landing guard still runs for a game opened by hand.
+-- Flight time: a recording of that exact from -> to flight when there is one: ours (db.flightTimes,
+-- learned on every landing) or Polestar's (PolestarCharDB.flightTimes, same "fromID>toID" keys); else an
+-- estimate from the taxi map's route hops at gryphon speed. Only a recorded time puts the game away
+-- before landing: an estimate can be a minute short (the path curves), so on an estimate the game
+-- stays open until the actual landing. No time at all: as in Polestar, no card on that flight; the
+-- landing guard still runs for a game opened by hand.
 --
 -- Cost: nothing ticks on the ground. A driver frame ticks twice a second from picking a destination
 -- (or boarding) until landing; the card is built on the first offer.
@@ -48,7 +50,23 @@ end
 ---------------------------------------------------------------------------
 -- Flight timing
 ---------------------------------------------------------------------------
-local function routeKey(from, to) return (from or "?") .. " -> " .. (to or "?") end
+-- node IDs when the client gives them (Polestar's keys), else lower-case names
+local function routeKey(p)
+  if p.fromId and p.toId then return p.fromId .. ">" .. p.toId end
+  if p.from and p.to then return string.lower(p.from) .. ">" .. string.lower(p.to) end
+  return nil
+end
+
+local function recorded(key)
+  if not key then return nil end
+  local own = ns.db.flightTimes and ns.db.flightTimes[key]
+  if type(own) == "number" then return own, "learned" end
+  local pc = _G.PolestarCharDB
+  local ps = type(pc) == "table" and type(pc.flightTimes) == "table" and pc.flightTimes[key]
+  if type(ps) == "number" then return ps, "polestar" end
+  return nil
+end
+F.Recorded = recorded
 
 -- seconds left (nil when unknown), source ("learned" | "estimate")
 function F.SecondsLeft()
@@ -66,24 +84,66 @@ local function taxiMapYards()
   return nil
 end
 
-local function onTake(slot)
-  if type(NumTaxiNodes) ~= "function" or type(TaxiNodeName) ~= "function" then return end
-  local to = TaxiNodeName(slot)
-  local from, fi
-  for i = 1, NumTaxiNodes() or 0 do
-    if TaxiNodeGetType and TaxiNodeGetType(i) == "CURRENT" then from, fi = TaxiNodeName(i), i end
-  end
-  local est
-  if fi and type(TaxiNodePosition) == "function" then
-    local w, h = taxiMapYards()
-    local x1, y1 = TaxiNodePosition(fi)
-    local x2, y2 = TaxiNodePosition(slot)
-    if w and x1 and x2 then
-      local dx, dy = (x2 - x1) * w, (y2 - y1) * h
-      est = math.sqrt(dx * dx + dy * dy) * PATH / SPEED + STOP
+-- slot -> node ID, name (as Polestar's Client.TaxiSlot)
+local function slotNode(slot)
+  local id, name
+  local mapID = type(GetTaxiMapID) == "function" and GetTaxiMapID() or nil
+  if mapID and C_TaxiMap and C_TaxiMap.GetAllTaxiNodes then
+    local ok, list = pcall(C_TaxiMap.GetAllTaxiNodes, mapID)
+    if ok and type(list) == "table" then
+      for i = 1, #list do
+        local info = list[i]
+        if type(info) == "table" and info.slotIndex == slot then id, name = info.nodeID, info.name; break end
+      end
     end
   end
-  pending = { from = from, to = to, est = est, at = now() }
+  if not name and type(TaxiNodeName) == "function" then
+    name = TaxiNodeName(slot)
+    if name == "" then name = nil end
+  end
+  return id, name
+end
+
+-- Estimated seconds: the route's hops (the lines the flight map draws) at gryphon speed, else the
+-- straight line. Low by design of the data (paths curve), so it never closes the game early.
+local function estimate(fromSlot, slot)
+  local w, h = taxiMapYards()
+  if not w then return nil end
+  local yards, hops = 0, 0
+  if type(GetNumRoutes) == "function" and type(TaxiGetSrcX) == "function" and type(TaxiGetDestX) == "function" then
+    local n = GetNumRoutes(slot) or 0
+    for hop = 1, n do
+      local x1, y1 = TaxiGetSrcX(slot, hop), TaxiGetSrcY(slot, hop)
+      local x2, y2 = TaxiGetDestX(slot, hop), TaxiGetDestY(slot, hop)
+      if x1 and y1 and x2 and y2 then
+        local dx, dy = (x2 - x1) * w, (y2 - y1) * h
+        yards, hops = yards + math.sqrt(dx * dx + dy * dy), hops + 1
+      end
+    end
+  end
+  if hops == 0 and fromSlot and type(TaxiNodePosition) == "function" then
+    local x1, y1 = TaxiNodePosition(fromSlot)
+    local x2, y2 = TaxiNodePosition(slot)
+    if x1 and x2 then
+      local dx, dy = (x2 - x1) * w, (y2 - y1) * h
+      yards, hops = math.sqrt(dx * dx + dy * dy), 1
+    end
+  end
+  if hops == 0 then return nil end
+  return yards * PATH / SPEED + STOP * hops
+end
+
+local function onTake(slot)
+  if type(NumTaxiNodes) ~= "function" then return end
+  local toId, to = slotNode(slot)
+  local fromId, from, fi
+  for i = 1, NumTaxiNodes() or 0 do
+    if TaxiNodeGetType and TaxiNodeGetType(i) == "CURRENT" then
+      fi = i
+      fromId, from = slotNode(i)
+    end
+  end
+  pending = { from = from, to = to, fromId = fromId, toId = toId, est = estimate(fi, slot), at = now() }
   F.Wake()
 end
 
@@ -92,9 +152,9 @@ local function begin()
   pending = nil
   flight = { start = now(), boarded = p ~= nil }
   if p then
-    flight.from, flight.to = p.from, p.to
-    local learned = ns.db.flightTimes and ns.db.flightTimes[routeKey(p.from, p.to)]
-    if learned then flight.total, flight.source = learned, "learned"
+    flight.from, flight.to, flight.fromId, flight.toId = p.from, p.to, p.fromId, p.toId
+    local rec, src = recorded(routeKey(p))
+    if rec then flight.total, flight.source = rec, src
     elseif p.est then flight.total, flight.source = p.est, "estimate" end
   end
   if ns.db.flightOffer then F.StartTrip(false) end
@@ -104,9 +164,10 @@ local function land(byLoadingScreen)
   local f = flight
   flight = nil
   local elapsed = now() - f.start
-  if f.boarded and f.to and not byLoadingScreen and elapsed >= MIN_FLIGHT and elapsed <= MAX_FLIGHT then
+  local key = f.boarded and routeKey(f)
+  if key and not byLoadingScreen and elapsed >= MIN_FLIGHT and elapsed <= MAX_FLIGHT then
     ns.db.flightTimes = ns.db.flightTimes or {}
-    ns.db.flightTimes[routeKey(f.from, f.to)] = math.floor(elapsed + 0.5)
+    ns.db.flightTimes[key] = math.floor(elapsed + 0.5)
   end
   F.Landed()
 end
@@ -236,8 +297,8 @@ local function tripTick()
   if not trip then return end
   -- off, with nothing of ours to put away: the flight is none of our business
   if not ns.db.flightOffer and not trip.closedByUs and not ns.IsOpen() then stopTrip() return end
-  local left = F.SecondsLeft()
-  if left and left <= LANDING then
+  local left, source = F.SecondsLeft()
+  if left and left <= LANDING and source ~= "estimate" then
     hide()
     if not trip.warned then
       trip.warned = true
@@ -250,6 +311,7 @@ local function tripTick()
     end
     return
   end
+  if left and left <= LANDING then hide() return end -- an estimate ran out: still flying, no new offer
   if not offerable(left) then hide() return end
   if not trip.asked then
     trip.asked = true
