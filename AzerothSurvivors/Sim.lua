@@ -12,10 +12,19 @@ local CELL = 64
 local MAX_R = 40 -- largest enemy radius (boss); grid queries widen by this
 
 local function noop() end
+-- victory: the run reached 10:00. Without a handler (headless runs) it cashes out at once.
 local NOHOOKS = { release = noop, number = noop, fx = noop, levelup = noop, hurt = noop, kill = noop, over = noop, pickup = noop, heal = noop,
-  chest = noop, evolve = noop }
+  chest = noop, evolve = noop, revive = noop, victory = function(S) Sim.CashOut(S) end }
 
-function Sim.HpScale(t) return 1 + t / 300 + (t / 550) ^ 2 end
+-- enemy health over time; past 10:00 (Endless) it climbs faster
+function Sim.HpScale(t)
+  local h = 1 + t / 300 + (t / 550) ^ 2
+  if t > C.RUN_SECONDS then
+    local d = t - C.RUN_SECONDS
+    h = h * (1 + d / C.ENDLESS.hpRamp + (d / C.ENDLESS.hpRamp2) ^ 2)
+  end
+  return h
+end
 
 -- plain copy of a flat table of numbers/booleans (meta ranks, curse set)
 local function copyFlat(t)
@@ -40,6 +49,7 @@ Sim.RecipeOf = recipeOf
 --   meta    = { might = rank, armor, maxhp, recovery, swift, greed, growth, reroll, skip, insight } (shop ranks)
 --   curses  = { horde = true, brutal = true, haste = true, frail = true }
 --   unlocks = { reroll = n, slot = n } (achievement bonuses)
+--   asc     = n (Ascension level 0-10, see C.AscRules)
 ---------------------------------------------------------------------------
 function Sim.New(opts)
   opts = opts or {}
@@ -48,15 +58,21 @@ function Sim.New(opts)
   local cd = C.CLASSES[cls]
   local meta, curses, unlocks = copyFlat(opts.meta), copyFlat(opts.curses), copyFlat(opts.unlocks)
   local xpMul, goldMul = C.CurseMult(curses)
+  local asc = C.AscRules(opts.asc)
   local S = {
     class = cls, cdef = cd, impacts = {}, nImp = 0, xpBank = 0, coinBank = 0,
     t = 0, kills = 0, state = "play", dmgDone = 0,
     meta = meta, curses = curses, unlocks = unlocks,
     gold = 0, dmgBy = {}, gotAt = {}, evolved = {}, nEvolved = 0, chestN = 0,
-    xpMul = xpMul * (1 + 0.05 * (meta.growth or 0)), goldMul = goldMul,
-    spawnMul = 1, eHpMul = 1, eSpeedMul = 1,
+    xpMul = xpMul * (1 + 0.05 * (meta.growth or 0)), goldMul = goldMul * asc.gold,
+    spawnMul = asc.spawn, eHpMul = asc.hp, eSpeedMul = asc.eSpeed, eDmgMul = asc.dmg,
     rerolls = (meta.reroll or 0) + (unlocks.reroll or 0), skips = meta.skip or 0,
-    nChoices = (meta.insight or 0) > 0 and 4 or 3,
+    nChoices = math.max(2, ((meta.insight or 0) > 0 and 4 or 3) - asc.choicesLess),
+    -- 0.6: shop extras, Limit Break stacks, Ascension, Endless
+    revives = meta.revival or 0, banishes = meta.banish or 0, banished = {}, luck = meta.luck or 0, amount = meta.amount or 0,
+    limit = {}, lbPicks = 0, lbAmtAt = 0,
+    asc = asc.level, ascR = asc, eliteEvery = asc.eliteEvery or C.ELITE_EVERY,
+    nextBoss = asc.bossAt or C.BOSS_AT, bossN = 0,
     wslots = C.WEAPON_SLOTS + (unlocks.slot or 0),
     viewR = opts.viewR or 600,
     cap = opts.cap or C.MAX_ENEMIES,
@@ -68,7 +84,7 @@ function Sim.New(opts)
     enemies = {}, nE = 0, projs = {}, nP = 0, gems = {}, nG = 0, items = {}, nI = 0,
     enemyPool = {}, projPool = {}, gemPool = {},
     weapons = {}, wlist = {}, passives = {}, plist = {},
-    spawnAcc = 0, nextElite = C.ELITE_EVERY, nextSwarm = C.SWARM_EVERY,
+    spawnAcc = 0, nextElite = asc.eliteEvery or C.ELITE_EVERY, nextSwarm = C.SWARM_EVERY,
     pendingLevels = 0, choices = nil,
     grid = {}, gridUsed = {}, nUsed = 0, nBuckets = 0, q = {}, q2 = {}, targets = {},
     nextId = 0, castId = 0,
@@ -80,7 +96,9 @@ function Sim.New(opts)
   p.maxhp = p.maxhp + cd.hp * 0.10 * (meta.maxhp or 0)
   p.regen = p.regen + 0.2 * (meta.recovery or 0)
   p.speed = p.speed + cd.speed * 0.05 * (meta.swift or 0)
-  p.magnet = p.magnet + P.magnet * 0.20 * (meta.greed or 0)
+  p.magnet = p.magnet + P.magnet * 0.20 * (meta.greed or 0) + P.magnet * 0.10 * (meta.magnet or 0)
+  p.haste = p.haste * 0.97 ^ (meta.cooldown or 0)
+  p.area = p.area + 0.05 * (meta.area or 0)
   -- curses
   for _, c in ipairs(C.CURSES) do
     if curses[c.id] then
@@ -172,6 +190,45 @@ function Sim.AddPassive(S, id)
   elseif d.stat == "area" then p.area = p.area + d.add end
 end
 
+-- a skill's effective count: its own, +1 per shop Amount (any skill with a count), +1 per Limit Break Amount
+-- (bolt, fan and missile skills). Render reads it too.
+function Sim.Count(S, w)
+  local t = w.def.type
+  local n = w.count or 0
+  if C.COUNT_TYPES[t] then n = n + (S.amount or 0) end
+  if C.LIMIT_AMOUNT_TYPES[t] then n = n + (S.limit and S.limit.amount or 0) end
+  return n
+end
+local wcount = Sim.Count
+
+-- one Limit Break stack (C.LIMIT)
+function Sim.AddLimit(S, id)
+  local p, P = S.p, C.PLAYER
+  S.limit[id] = (S.limit[id] or 0) + 1
+  if id == "might" then p.might = p.might + 0.03
+  elseif id == "maxhp" then p.maxhp = p.maxhp + 10; p.hp = p.hp + 10
+  elseif id == "crit" then p.crit = p.crit + 0.02
+  elseif id == "haste" then p.haste = math.max(C.LIMIT_HASTE_FLOOR, p.haste * 0.98)
+  elseif id == "area" then p.area = p.area + 0.05
+  elseif id == "speed" then p.speed = p.speed + S.cdef.speed * 0.04
+  elseif id == "magnet" then p.magnet = p.magnet + P.magnet * 0.05 end
+end
+
+-- Limit Break cards that may be offered now
+local function limitOffers(S)
+  local out = {}
+  for _, l in ipairs(C.LIMIT) do
+    local n = S.limit[l.id] or 0
+    local ok = not l.cap or n < l.cap
+    if l.id == "haste" and S.p.haste * 0.98 < C.LIMIT_HASTE_FLOOR then ok = false end
+    if l.id == "crit" and S.p.crit >= 1 then ok = false end
+    if l.every and S.lbPicks - (S.lbAmtAt or 0) < l.every - 1 then ok = false end
+    if ok then out[#out + 1] = l.id end
+  end
+  return out
+end
+Sim.LimitOffers = limitOffers
+
 -- skills a class may take: its kit, then (with a 6th weapon slot unlocked) other classes' skills
 local foreignCache
 local function foreignSkills(S)
@@ -192,7 +249,8 @@ end
 -- Evolved weapons (and the weapons they replaced) are never offered.
 function Sim.RollChoices(S)
   local pool, wts = {}, {}
-  local function add(c, wt) pool[#pool + 1] = c; wts[#wts + 1] = wt end
+  local banished = S.banished or {}
+  local function add(c, wt) if not banished[c.id] then pool[#pool + 1] = c; wts[#wts + 1] = wt end end
   local inKit = {}
   for _, id in ipairs(S.cdef.kit) do
     inKit[id] = true
@@ -234,6 +292,14 @@ function Sim.RollChoices(S)
       if r <= 0 and wts[i] > 0 then picks[#picks + 1] = pool[i]; wts[i] = 0; break end
     end
   end
+  if #picks == 0 then -- nothing left to offer: Limit Break
+    local lb = limitOffers(S)
+    for _ = 1, S.nChoices or 3 do
+      if #lb == 0 then break end
+      local id = table.remove(lb, random(#lb))
+      picks[#picks + 1] = { kind = "limit", id = id, level = (S.limit[id] or 0) + 1 }
+    end
+  end
   if #picks == 0 then picks[1] = { kind = "heal" } end
   S.choices = picks
   return picks
@@ -241,6 +307,10 @@ end
 
 function Sim.ChoiceText(c)
   if c.kind == "heal" then return "Healing Potion", "Restore 40 health.", "Interface\\Icons\\INV_Potion_54" end
+  if c.kind == "limit" then
+    local l = C.LIMIT_BY_ID[c.id]
+    return "Limit Break: " .. l.name, l.text .. ".  Now " .. C.LimitLabel(c.id, (c.level or 1) - 1) .. ", then " .. C.LimitLabel(c.id, c.level or 1) .. ".", l.icon
+  end
   if c.kind == "gold" then return c.amount .. " gold", "A pile of gold for the shop.", "Interface\\Icons\\INV_Misc_Coin_01" end
   if c.kind == "evolve" then
     local d, from = C.WEAPONS[c.id], C.WEAPONS[c.from]
@@ -256,7 +326,11 @@ function Sim.ChoiceText(c)
 end
 
 local function apply(S, c)
-  if c.kind == "heal" then S.p.hp = min(S.p.maxhp, S.p.hp + 40)
+  if c.kind == "heal" then S.p.hp = min(S.p.maxhp, S.p.hp + 40 * S.ascR.healMul)
+  elseif c.kind == "limit" then
+    Sim.AddLimit(S, c.id)
+    S.lbPicks = S.lbPicks + 1
+    if c.id == "amount" then S.lbAmtAt = S.lbPicks end
   elseif c.kind == "gold" then S.gold = S.gold + c.amount
   elseif c.kind == "weapon" then
     if S.weapons[c.id] then Sim.LevelWeapon(S, c.id) else Sim.AddWeapon(S, c.id) end
@@ -289,6 +363,17 @@ end
 function Sim.Reroll(S)
   if S.state ~= "levelup" or (S.rerolls or 0) <= 0 then return false end
   S.rerolls = S.rerolls - 1
+  Sim.RollChoices(S)
+  S.hooks.levelup(S)
+  return true
+end
+
+-- B on the level-up screen, then a card: that card's skill or passive is never offered again this run (new cards)
+function Sim.Banish(S, i)
+  local c = S.choices and S.choices[i]
+  if S.state ~= "levelup" or (S.banishes or 0) <= 0 or not c or (c.kind ~= "weapon" and c.kind ~= "passive") then return false end
+  S.banishes = S.banishes - 1
+  S.banished[c.id] = true
   Sim.RollChoices(S)
   S.hooks.levelup(S)
   return true
@@ -425,11 +510,17 @@ local function spawnEnemy(S, kind, x, y, force)
   if S.nE >= S.cap and not force then return nil end
   local d = C.ENEMIES[kind]
   local e = tremove(S.enemyPool) or {}
-  local hs = (d.boss and 1 or Sim.HpScale(S.t)) * S.eHpMul
+  local hs = (d.boss and 1 or Sim.HpScale(S.t)) * S.eHpMul * (d.elite and S.ascR.eliteHp or 1)
   e.kind, e.def, e.x, e.y, e.r = kind, d, x, y, d.r
   e.hp = d.hp * hs; e.maxhp = e.hp
   e.speed = d.speed * (0.9 + random() * 0.2) * S.eSpeedMul
-  e.dmg = d.dmg * (1 + S.t / 600)
+  e.dmg = d.dmg * (1 + S.t / 600) * S.eDmgMul
+  if S.t > C.RUN_SECONDS then -- Endless: harder hitting and faster
+    local d = S.t - C.RUN_SECONDS
+    e.dmg = e.dmg * (1 + d / C.ENDLESS.dmgRamp)
+    e.speed = e.speed * min(C.ENDLESS.speedMax, 1 + d / C.ENDLESS.speedRamp)
+  end
+  e.enraged = nil
   e.slow, e.flash, e.kx, e.ky, e.orbT, e.lastProj, e.chainId = 0, 0, 0, 0, -1, 0, 0
   e.root, e.dot, e.dotT, e.pdps, e.pT, e.dotAcc = 0, 0, 0, 0, 0, 0
   e.dotSrc, e.pSrc = nil, nil
@@ -531,11 +622,16 @@ local function damage(S, e, amt, kx, ky, dot, dotDur, isDot)
         local a = k * TAU / d.coins
         dropItem(S, "coin", e.x + cos(a) * 26, e.y + sin(a) * 26, d.coinValue or 1)
       end
-    elseif random() < C.COIN_CHANCE then
+    elseif random() < C.COIN_CHANCE * (1 + 0.25 * (S.luck or 0)) then
       dropItem(S, "coin", e.x, e.y, 1)
     end
-    if e == S.boss then S.boss = nil; S.bossKilled = true; S.bossKilledAt = S.t end
+    if e == S.boss then S.boss = nil; S.bossKilled = true; S.bossKilledAt = S.bossKilledAt or S.t; S.bossKills = (S.bossKills or 0) + 1 end
     S.hooks.kill(S, e)
+  elseif e == S.boss and S.ascR.enrage and not e.enraged and e.hp < e.maxhp * 0.5 then
+    -- Ascension 10: the Frost Lich enrages at half health
+    e.enraged = true
+    e.speed, e.dmg = e.speed * 1.5, e.dmg * 1.5
+    S.hooks.fx(S, "enrage", e.x, e.y)
   end
 end
 Sim.Damage = damage
@@ -567,6 +663,12 @@ local function hurtPlayer(S, e)
   S.hooks.hurt(S, dmg)
   if p.hp <= 0 then
     if S.invuln then p.hp = p.maxhp
+    elseif (S.revives or 0) > 0 then -- shop Revival: back at half health, 2 s untouchable
+      S.revives = S.revives - 1
+      S.revived = (S.revived or 0) + 1
+      p.hp = p.maxhp * 0.5
+      p.iframes = 2
+      S.hooks.revive(S)
     else p.hp = 0; S.state = "dead"; S.hooks.over(S, false) end
   end
 end
@@ -640,8 +742,9 @@ end
 function W.proj(S, w, dt)
   if not ready(S, w, dt) then return end
   local p, T = S.p, S.targets
-  local nT = nearest(S, p.x, p.y, w.count, S.viewR * 0.9)
-  for k = 1, w.count do
+  local cnt = wcount(S, w)
+  local nT = nearest(S, p.x, p.y, cnt, S.viewR * 0.9)
+  for k = 1, cnt do
     local t = T[((k - 1) % max(nT, 1)) + 1]
     local a
     if nT > 0 and t then a = math.atan2(t.y - p.y, t.x - p.x) else a = math.atan2(p.fy, p.fx) end
@@ -655,8 +758,9 @@ function W.burst(S, w, dt)
   if not ready(S, w, dt) then return end
   local p = S.p
   local a0 = random() * TAU
-  for k = 1, w.count do
-    local a = a0 + k * TAU / w.count
+  local cnt = wcount(S, w)
+  for k = 1, cnt do
+    local a = a0 + k * TAU / cnt
     spawnProj(S, p.x, p.y, cos(a) * w.speed, sin(a) * w.speed, w)
   end
 end
@@ -691,8 +795,9 @@ function W.orbit(S, w, dt)
   w.angle = (w.angle + w.spin * dt) % TAU
   local R = w.radius * p.area
   local hitR = 11 * p.area
-  for k = 1, w.count do
-    local a = w.angle + (k - 1) * TAU / w.count
+  local cnt = wcount(S, w)
+  for k = 1, cnt do
+    local a = w.angle + (k - 1) * TAU / cnt
     local ox, oy = p.x + cos(a) * R, p.y + sin(a) * R
     w.orbs[2 * k - 1], w.orbs[2 * k] = ox, oy
     local n = query(S, ox, oy, hitR, q)
@@ -727,7 +832,8 @@ function W.nova(S, w, dt)
   for i = 1, n do
     local e = q[i]
     if w.slow > 0 then
-      if w.root and not e.def.boss then e.root = w.slow else e.slow = w.slow end
+      local sl = w.slow * (S.ccMul or 1)
+      if w.root and not e.def.boss then e.root = sl else e.slow = sl end
     end
     damage(S, e, w.dmg)
   end
@@ -782,7 +888,7 @@ function W.strike(S, w, dt)
   local n = query(S, p.x, p.y, S.viewR * 0.55, q) -- near enough that the crystals can be collected
   if n == 0 then w.timer = 0.2; return end
   w.timer = w.cd * p.haste
-  for _ = 1, w.count do
+  for _ = 1, wcount(S, w) do
     local e = q[random(n)]
     if w.delay > 0 then
       local imp = { x = e.x, y = e.y, t = w.delay, w = w, src = w.id }
@@ -879,6 +985,7 @@ end
 local HIT = {}
 function HIT.chill(S, pr, e)
   local sl = pr.w.slow or 1
+  sl = sl * (S.ccMul or 1)
   if e.slow < sl then e.slow = sl end
 end
 function HIT.explode(S, pr, e)
@@ -897,11 +1004,12 @@ end
 function W.missile(S, w, dt)
   if not ready(S, w, dt) then return end
   local p, T = S.p, S.targets
-  local nT = nearest(S, p.x, p.y, w.count, S.viewR * 0.8)
+  local cnt = wcount(S, w)
+  local nT = nearest(S, p.x, p.y, cnt, S.viewR * 0.8)
   if nT == 0 then w.timer = 0.2; return end
   local a0 = atan2(T[1].y - p.y, T[1].x - p.x)
-  for k = 1, w.count do
-    local a = a0 + (k - (w.count + 1) / 2) * 0.35 + (random() - 0.5) * 0.3
+  for k = 1, cnt do
+    local a = a0 + (k - (cnt + 1) / 2) * 0.35 + (random() - 0.5) * 0.3
     spawnProj(S, p.x, p.y, cos(a) * w.speed, sin(a) * w.speed, w)
     local pr = lastProj(S)
     pr.src, pr.tgt = w.id, T[((k - 1) % nT) + 1]
@@ -914,7 +1022,7 @@ function W.fan(S, w, dt)
   local p, T = S.p, S.targets
   local a
   if nearest(S, p.x, p.y, 1, S.viewR * 0.9) > 0 then a = atan2(T[1].y - p.y, T[1].x - p.x) else a = atan2(p.fy, p.fx) end
-  local n = w.count
+  local n = wcount(S, w)
   for k = 1, n do
     local b = a + (n > 1 and ((k - 1) / (n - 1) - 0.5) * w.spread or 0)
     spawnProj(S, p.x, p.y, cos(b) * w.speed, sin(b) * w.speed, w)
@@ -951,7 +1059,7 @@ function W.zone(S, w, dt)
   if w.timer > 0 then return end
   local R = w.radius * S.p.area
   local placed = false
-  for _ = 1, w.count do
+  for _ = 1, wcount(S, w) do
     local x, y = clusterPoint(S, R)
     if not x then break end
     placed = true
@@ -969,7 +1077,7 @@ function W.dot(S, w, dt)
   if n == 0 then w.timer = 0.2; return end
   w.timer = w.cd * p.haste
   S.curSrc = w.id
-  for _ = 1, w.count do
+  for _ = 1, wcount(S, w) do
     local e = q[random(n)]
     for _ = 1, 3 do -- prefer enemies not yet cursed
       if e.corr and not e.dead then e = q[random(n)] else break end
@@ -984,7 +1092,7 @@ end
 function W.beam(S, w, dt)
   if not ready(S, w, dt) then return end
   local p, T = S.p, S.targets
-  local n = nearest(S, p.x, p.y, w.count, w.range * p.area)
+  local n = nearest(S, p.x, p.y, wcount(S, w), w.range * p.area)
   if n == 0 then return end
   S.curSrc = w.id
   for k = 1, n do
@@ -1000,7 +1108,7 @@ function W.trap(S, w, dt)
   if not ready(S, w, dt) then return end
   local p, mine = S.p, 0
   for i = 1, S.nTr do if S.traps[i].src == w.id then mine = mine + 1 end end
-  if mine >= w.count then w.timer = 0.3; return end
+  if mine >= wcount(S, w) then w.timer = 0.3; return end
   local tr = tremove(S.trapPool) or {}
   local a, d = random() * TAU, 25 + random() * 55
   tr.x, tr.y, tr.arm, tr.life, tr.w, tr.src, tr.dead, tr.tex = p.x + cos(a) * d, p.y + sin(a) * d, 0.5, w.life, w, w.id, false, nil
@@ -1013,14 +1121,15 @@ function W.pet(S, w, dt)
   local p = S.p
   local pets = w.pets
   if not pets then pets = {}; w.pets = pets end
-  for k = #pets + 1, w.count do
+  local cnt = wcount(S, w)
+  for k = #pets + 1, cnt do
     local a = random() * TAU
     pets[k] = { x = p.x + cos(a) * 40, y = p.y + sin(a) * 40, cd = 0.4, face = 1, moving = false, re = 0 }
   end
-  for k = w.count + 1, #pets do pets[k] = nil end
+  for k = cnt + 1, #pets do pets[k] = nil end
   S.curSrc = w.id
   local melee = w.def.mode == "melee"
-  for k = 1, w.count do
+  for k = 1, cnt do
     local pet = pets[k]
     pet.cd = pet.cd - dt
     local ddx, ddy = p.x - pet.x, p.y - pet.y
@@ -1060,7 +1169,7 @@ function W.pet(S, w, dt)
         tx, ty = p.x + (k % 2 == 0 and 1 or -1) * (36 + k * 6), p.y - 26
       end
     else
-      local a = S.t * 0.8 + k * TAU / w.count
+      local a = S.t * 0.8 + k * TAU / cnt
       tx, ty = p.x + cos(a) * 55, p.y + sin(a) * 40 + 12
       if pet.cd <= 0 then
         local T = S.targets
@@ -1106,7 +1215,7 @@ local function spawnEnemyBolt(S, e, ux, uy)
   local b = tremove(S.ebPool) or {}
   b.kind, b.x, b.y = "enemybolt", e.x + ux * e.r, e.y + uy * e.r
   b.vx, b.vy = ux * def.boltSpeed, uy * def.boltSpeed
-  b.dmg, b.life, b.dead, b.tex = def.boltDmg * e.dmg / def.dmg, 4, false, nil
+  b.dmg, b.life, b.dead, b.tex = def.boltDmg * e.dmg / def.dmg * S.ascR.boltDmg, 4, false, nil
   S.nEB = S.nEB + 1
   S.ebolts[S.nEB] = b
 end
@@ -1193,7 +1302,7 @@ end
 local PICKUP = {}
 function PICKUP.chicken(S)
   local p = S.p
-  local h = min(p.maxhp - p.hp, p.maxhp * C.PICKUPS.chicken.heal)
+  local h = min(p.maxhp - p.hp, p.maxhp * C.PICKUPS.chicken.heal * S.ascR.healMul)
   p.hp = p.hp + h
   S.hooks.heal(S, h)
 end
@@ -1290,7 +1399,7 @@ local function stepZones(S, dt)
         local n = query(S, z.x, z.y, z.r, q)
         for k = 1, n do
           local e = q[k]
-          if w.slow and e.slow < w.slow then e.slow = w.slow end
+          if w.slow and e.slow < w.slow * (S.ccMul or 1) then e.slow = w.slow * (S.ccMul or 1) end
           damage(S, e, w.dmg)
         end
         if w.def.rain then S.hooks.fx(S, "rain", z.x, z.y, z.r, w) end
@@ -1377,6 +1486,35 @@ function Sim.StepContent(S, dt)
 end
 
 ---------------------------------------------------------------------------
+-- Endless
+---------------------------------------------------------------------------
+-- gold per coin past 10:00: +10% per minute
+function Sim.EndlessGold(t)
+  if t <= C.RUN_SECONDS then return 1 end
+  return 1 + C.ENDLESS.goldPerMin * (t - C.RUN_SECONDS) / 60
+end
+
+-- the victory panel's two ways on
+function Sim.CashOut(S)
+  if S.state ~= "victory" then return false end
+  S.state = "won"
+  S.hooks.over(S, true)
+  return true
+end
+
+function Sim.KeepGoing(S)
+  if S.state ~= "victory" then return false end
+  S.endless = true
+  S.state = "play"
+  return true
+end
+
+-- seconds survived past 10:00 (0 when the run did not go on)
+function Sim.EndlessTime(S)
+  return S.endless and max(0, S.t - C.RUN_SECONDS) or 0
+end
+
+---------------------------------------------------------------------------
 -- step
 ---------------------------------------------------------------------------
 function Sim.Step(S, dt, ix, iy)
@@ -1387,7 +1525,13 @@ function Sim.Step(S, dt, ix, iy)
 
   -- spawning
   S.curSrc = nil
-  local target = min(S.cap, C.TargetPop(S.t) * S.spawnMul)
+  local cap = S.cap
+  if S.t > C.RUN_SECONDS and not S.stress then -- Endless: the horde keeps growing and shrugs off roots and slows
+    local d = S.t - C.RUN_SECONDS
+    cap = cap + min(C.ENDLESS.capMax, d * C.ENDLESS.capPerSec)
+    S.ccMul = 1 / (1 + d / C.ENDLESS.ccRamp)
+  end
+  local target = min(cap, C.TargetPop(S.t) * S.spawnMul)
   S.spawnAcc = min(S.spawnAcc + dt * (S.stress and 400 or 25 * S.spawnMul), S.stress and 50 or 6)
   while S.spawnAcc >= 1 and S.nE < (S.stress and S.cap or target) do
     S.spawnAcc = S.spawnAcc - 1
@@ -1395,7 +1539,7 @@ function Sim.Step(S, dt, ix, iy)
     spawnEnemy(S, pickKind(S.t, S.zdef and S.zdef.mix), x, y)
   end
   if S.t >= S.nextElite then
-    S.nextElite = S.nextElite + C.ELITE_EVERY
+    S.nextElite = S.nextElite + (S.eliteEvery or C.ELITE_EVERY)
     local x, y = ringPos(S, S.viewR + 40)
     spawnEnemy(S, "elite", x, y, true)
   end
@@ -1411,11 +1555,19 @@ function Sim.Step(S, dt, ix, iy)
     end
     S.hooks.fx(S, "swarm")
   end
-  if not S.bossSpawned and S.t >= C.BOSS_AT then
+  -- the Frost Lich: at 8:00 (7:00 on Ascension 3+), then in Endless every 5 minutes, stronger each time
+  if S.t >= S.nextBoss and not S.boss then
+    local n = S.bossN
     S.bossSpawned = true
+    S.bossN = n + 1
+    S.nextBoss = n == 0 and C.RUN_SECONDS + C.ENDLESS.bossEvery or S.nextBoss + C.ENDLESS.bossEvery
     local x, y = ringPos(S, S.viewR + 60)
-    spawnEnemy(S, "boss", x, y, true)
-    S.hooks.fx(S, "boss")
+    local e = spawnEnemy(S, "boss", x, y, true)
+    if n > 0 then
+      e.hp = e.hp * (1 + C.ENDLESS.bossHp * n); e.maxhp = e.hp
+      e.dmg = e.dmg * (1 + C.ENDLESS.bossDmg * n)
+    end
+    S.hooks.fx(S, "boss", n)
   end
 
   -- player
@@ -1555,9 +1707,13 @@ function Sim.Step(S, dt, ix, iy)
     local d2 = dx * dx + dy * dy
     if d2 < (p.r + 16) ^ 2 then
       it.dead = true
-      if it.kind == "potion" then p.hp = min(p.maxhp, p.hp + p.maxhp * 0.3)
-      elseif it.kind == "coin" then S.gold = S.gold + (it.value or 1) * S.goldMul
-      elseif it.kind == "chest" then S.chestN = S.chestN + (it.value or 1)
+      if it.kind == "potion" then p.hp = min(p.maxhp, p.hp + p.maxhp * 0.3 * S.ascR.healMul)
+      elseif it.kind == "coin" then S.gold = S.gold + (it.value or 1) * S.goldMul * Sim.EndlessGold(S.t)
+      elseif it.kind == "chest" then
+        -- Ascension 9: one upgrade fewer (min 1); Luck: 15% per rank for one more
+        local n = max(1, (it.value or 1) - S.ascR.chestLess)
+        if (S.luck or 0) > 0 and random() < 0.15 * S.luck then n = n + 1 end
+        S.chestN = S.chestN + n
       else
         local pk = PICKUP[it.kind] -- magnet, chicken, bomb
         if pk then pk(S, it) end
@@ -1581,9 +1737,11 @@ function Sim.Step(S, dt, ix, iy)
   S.nI = compact(S, S.items, S.nI, nil)
   if S.state ~= "play" then return end -- killed by an enemy projectile
 
-  if S.t >= C.RUN_SECONDS and not S.stress then
-    S.state = "won"
-    S.hooks.over(S, true)
+  if S.t >= C.RUN_SECONDS and not S.stress and not S.won10 then
+    -- 10:00: the win is recorded now (hooks.victory); then cash out (results) or keep going (Endless)
+    S.won10 = true
+    S.state = "victory"
+    S.hooks.victory(S)
     return
   end
   if S.chestN > 0 then
@@ -1601,13 +1759,15 @@ end
 ---------------------------------------------------------------------------
 -- v2: gold, dmgBy, gotAt, meta, curses, unlocks, rerolls/skips, chests, evolved weapons, item values.
 -- v1 saves still load (the new fields start empty).
-Sim.SAVE_VERSION = 2
+-- v3 (0.6): Limit Break stacks, Ascension level, Endless (won10, endless, banked gold), boss schedule, elite
+-- interval, revives / banishes left and the banished ids. v2 saves load with those at their defaults.
+Sim.SAVE_VERSION = 3
 
 function Sim.Serialize(S)
   local p = S.p
   local d = {
     v = Sim.SAVE_VERSION, class = S.class, t = S.t, kills = S.kills, dmgDone = S.dmgDone,
-    state = (S.state == "levelup" or S.state == "chest") and S.state or "play",
+    state = (S.state == "levelup" or S.state == "chest" or S.state == "victory") and S.state or "play",
     spawnAcc = S.spawnAcc, nextElite = S.nextElite, nextSwarm = S.nextSwarm,
     bossSpawned = S.bossSpawned or nil, bossKilled = S.bossKilled or nil,
     pendingLevels = S.pendingLevels, xpBank = S.xpBank, picks = S.picks or 0,
@@ -1617,13 +1777,19 @@ function Sim.Serialize(S)
     rerolls = S.rerolls, skips = S.skips,
     meta = copyFlat(S.meta), curses = copyFlat(S.curses), unlocks = copyFlat(S.unlocks),
     dmgBy = copyFlat(S.dmgBy), gotAt = copyFlat(S.gotAt),
+    -- v3
+    limit = copyFlat(S.limit), lbPicks = S.lbPicks, lbAmtAt = S.lbAmtAt, asc = S.asc,
+    won10 = S.won10 or nil, endless = S.endless or nil, banked = S.banked,
+    nextBoss = S.nextBoss, bossN = S.bossN, bossKills = S.bossKills, nextEliteEvery = S.eliteEvery,
+    revives = S.revives, revived = S.revived, banishes = S.banishes, banished = copyFlat(S.banished),
   }
   for i, w in ipairs(S.wlist) do d.weapons[i] = { w.id, w.level, w.timer or 0, w.angle or 0 } end
   for i, id in ipairs(S.plist) do d.passives[i] = { id, S.passives[id] } end
   for i = 1, S.nE do
     local e = S.enemies[i]
     if not e.dead then
-      d.enemies[#d.enemies + 1] = { e.kind, e.x, e.y, e.hp, e.maxhp, e.speed, e.dmg, e.slow, e.root, e.dot, e.dotT, e.pdps, e.pT, e.face }
+      d.enemies[#d.enemies + 1] = { e.kind, e.x, e.y, e.hp, e.maxhp, e.speed, e.dmg, e.slow, e.root, e.dot, e.dotT, e.pdps, e.pT, e.face,
+        e.enraged and 1 or 0 }
     end
   end
   for i = 1, S.nG do local g = S.gems[i]; if not g.dead then d.gems[#d.gems + 1] = { g.x, g.y, g.xp } end end
@@ -1647,6 +1813,7 @@ function Sim.Deserialize(d, opts)
   -- the run keeps the shop ranks, curses and unlocks it started with
   opts.meta, opts.curses, opts.unlocks = d.meta, d.curses, d.unlocks
   opts.zone = d.zone
+  opts.asc = d.asc
   local S = Sim.New(opts)
   -- weapons in their order, levelled up the same way as in play
   S.weapons, S.wlist, S.poison, S.thorns, S.gotAt = {}, {}, nil, nil, {}
@@ -1668,6 +1835,18 @@ function Sim.Deserialize(d, opts)
   for _, pd in ipairs(d.passives or {}) do
     if C.PASSIVES[pd[1]] then for _ = 1, pd[2] do Sim.AddPassive(S, pd[1]) end end
   end
+  -- Limit Break stacks after the passives (as in play); a fixed order keeps the cooldown floor stable
+  for _, l in ipairs(C.LIMIT) do
+    local n = type(d.limit) == "table" and tonumber(d.limit[l.id]) or 0
+    for _ = 1, n do Sim.AddLimit(S, l.id) end
+  end
+  S.lbPicks, S.lbAmtAt = d.lbPicks or 0, d.lbAmtAt or 0
+  S.won10, S.endless, S.banked = d.won10, d.endless, d.banked
+  if d.revives then S.revives = d.revives end
+  S.revived = d.revived
+  if d.banishes then S.banishes = d.banishes end
+  if type(d.banished) == "table" then for k, v in pairs(d.banished) do S.banished[k] = v end end
+  if d.nextEliteEvery then S.eliteEvery = d.nextEliteEvery end
   local p, dp = S.p, d.p
   p.x, p.y, p.xp, p.level, p.fx, p.fy = dp.x, dp.y, dp.xp, dp.level, dp.fx, dp.fy
   p.hp = math.min(dp.hp, p.maxhp)
@@ -1675,12 +1854,18 @@ function Sim.Deserialize(d, opts)
   S.t, S.kills, S.dmgDone = d.t, d.kills, d.dmgDone
   S.spawnAcc, S.nextElite, S.nextSwarm = d.spawnAcc, d.nextElite, d.nextSwarm
   S.bossSpawned, S.bossKilled = d.bossSpawned, d.bossKilled
+  if d.nextBoss then
+    S.nextBoss, S.bossN, S.bossKills = d.nextBoss, d.bossN or 0, d.bossKills
+  elseif d.bossSpawned then -- a v1/v2 save after 8:00: the boss came once
+    S.nextBoss, S.bossN = C.RUN_SECONDS + C.ENDLESS.bossEvery, 1
+  end
   S.pendingLevels, S.xpBank, S.picks = d.pendingLevels, d.xpBank or 0, d.picks
   for _, ed in ipairs(d.enemies or {}) do
     if C.ENEMIES[ed[1]] then
       local e = spawnEnemy(S, ed[1], ed[2], ed[3], true)
       e.hp, e.maxhp, e.speed, e.dmg = ed[4], ed[5], ed[6], ed[7]
       e.slow, e.root, e.dot, e.dotT, e.pdps, e.pT, e.face = ed[8], ed[9], ed[10], ed[11], ed[12], ed[13], ed[14]
+      e.enraged = ed[15] == 1 or nil
     end
   end
   for _, gd in ipairs(d.gems or {}) do
@@ -1695,7 +1880,9 @@ function Sim.Deserialize(d, opts)
     S.items[S.nI] = it
   end
   Sim.RestoreEvents(S, d.ev)
-  if d.state == "chest" and S.chestN > 0 then
+  if d.state == "victory" and S.won10 then
+    S.state = "victory"
+  elseif d.state == "chest" and S.chestN > 0 then
     S.state = "chest"
   elseif d.state == "levelup" and d.choices then
     S.state = "levelup"

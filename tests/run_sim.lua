@@ -14,13 +14,19 @@ if os.getenv("VACUUM") then C.PLAYER.magnet = 3000 end
 math.randomseed(seed)
 
 local KEEP = (class == "paladin" or class == "rogue") and 75 or 130 -- melee classes fight up close
--- META=max buys every shop rank; META=might:3,armor:1 picks ranks. CURSES=horde,brutal turns curses on.
+-- META=max buys every base shop rank, META=full the prestige ranks too; META=might:3,armor:1 picks ranks.
+-- CURSES=horde,brutal turns curses on. ASC=n plays Ascension n. ENDLESS=1 keeps going after 10:00 (until death
+-- or ENDLESS_MAX seconds, default 3600).
 local meta, curses = {}, {}
 local mv = os.getenv("META")
 if mv == "max" then for _, s in ipairs(C.SHOP) do meta[s.id] = s.max end
+elseif mv == "full" then for _, s in ipairs(C.SHOP) do meta[s.id] = s.max + (s.prestige or 0) end
 elseif mv then for k, v in mv:gmatch("(%w+):(%d+)") do meta[k] = tonumber(v) end end
 for c in (os.getenv("CURSES") or ""):gmatch("%w+") do curses[c] = true end
-local S = Sim.New({ class = class, zone = os.getenv("ZONE"), viewR = 560, stress = mode == "stress", cap = mode == "stress" and cap or nil, meta = meta, curses = curses })
+local endless = os.getenv("ENDLESS")
+local hooks = endless and { victory = function(s) Sim.KeepGoing(s) end } or nil
+local S = Sim.New({ class = class, zone = os.getenv("ZONE"), viewR = tonumber(os.getenv("VIEWR") or 677), stress = mode == "stress",
+  cap = mode == "stress" and cap or nil, meta = meta, curses = curses, asc = tonumber(os.getenv("ASC") or "0"), hooks = hooks })
 local dt = 1 / 60
 local clock = os.clock
 local worst, total, steps = 0, 0, 0
@@ -71,7 +77,7 @@ local function bot()
   return ax * 2500 + gx + math.cos(t) * 0.2, ay * 900 + gy + math.sin(t) * 0.2
 end
 
-local limit = mode == "stress" and 60 or C.RUN_SECONDS + 5
+local limit = mode == "stress" and 60 or (endless and tonumber(os.getenv("ENDLESS_MAX") or "3600") or C.RUN_SECONDS + 5)
 while S.t < limit and S.state ~= "dead" and S.state ~= "won" do
   if S.state == "chest" then
     Sim.OpenChest(S)
@@ -86,7 +92,7 @@ while S.t < limit and S.state ~= "dead" and S.state ~= "won" do
     total, steps = total + el, steps + 1
     if S.t > 2 and el > worst then worst = el end
     if S.nE > maxE then maxE = S.nE end
-    if S.t >= nextMark then marks[#marks + 1] = string.format("%d:%d", nextMark / 60, S.p.level); nextMark = nextMark + 60 end
+    if S.t >= nextMark then marks[#marks + 1] = string.format("%d:%d", nextMark / 60, S.p.level); nextMark = nextMark + (S.t >= 600 and 120 or 60) end
   end
 end
 
@@ -98,6 +104,10 @@ print(string.format(class .. " %s seed=%d result=%s t=%.0fs level=%d kills=%d hp
   mode, seed, S.state, S.t, S.p.level, S.kills, S.p.hp, S.p.maxhp, maxE, S.nG))
 local killer = S.lastHit and S.lastHit.kind or "-"
 print("  level by minute: " .. table.concat(marks, " "))
+local lb = {}
+for _, l in ipairs(C.LIMIT) do if S.limit[l.id] then lb[#lb + 1] = C.LimitLabel(l.id, S.limit[l.id]) end end
+print(string.format("  asc %d  won10 %s  endless +%ds  bosses killed %d  revived %d  limit break %d: %s", S.asc, tostring(S.won10 or false),
+  math.floor(Sim.EndlessTime(S)), S.bossKills or 0, S.revived or 0, S.lbPicks, table.concat(lb, " ")))
 print("  last hit by: " .. killer .. "   boss " .. (S.bossKilled and ("killed at " .. math.floor(S.bossKilledAt or 0)) or (S.bossSpawned and "alive" or "not spawned")))
 local dmg = {}
 for k, v in pairs(S.dmgBy) do dmg[#dmg + 1] = { k, v } end

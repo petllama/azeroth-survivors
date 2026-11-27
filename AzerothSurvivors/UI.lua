@@ -6,7 +6,7 @@ ns.UI = UI
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local floor = math.floor
-local hud, xpBar, levelText, timerText, killText, goldText, bossBar, bossText, debugText, banner, slots
+local hud, xpBar, levelText, timerText, killText, goldText, modeText, limitText, bossBar, bossText, debugText, banner, slots
 local panels = {}
 local choiceButtons = {}
 local subs, subOpen = {}, nil
@@ -14,7 +14,7 @@ local toast
 local WEAPON_SLOTS_MAX = C.WEAPON_SLOTS + 1 -- the 6th slot is an achievement unlock
 -- results screen rows for damage that no skill did (S.dmgBy keys that are not weapon ids)
 local SOURCES = {
-  bomb  = { name = "Goblin Bomb", icon = "Interface\\Icons\\INV_Misc_Bomb_05", color = { 1, 0.55, 0.2 } },
+  bomb  = { name = "Bomb", icon = "Interface\\Icons\\INV_Misc_Bomb_05", color = { 1, 0.55, 0.2 } },
   other = { name = "Other", icon = "Interface\\Icons\\INV_Misc_QuestionMark", color = { 0.7, 0.7, 0.7 } },
 }
 UI.SOURCES = SOURCES
@@ -75,6 +75,9 @@ function UI.Init(frame)
   goldText = font(hud, 12)
   goldText:SetPoint("TOPRIGHT", killText, "BOTTOMRIGHT", 0, -4)
   goldText:SetTextColor(1, 0.82, 0)
+  modeText = font(hud, 11) -- "Ascension 3   Endless"
+  modeText:SetPoint("TOPRIGHT", goldText, "BOTTOMRIGHT", 0, -4)
+  modeText:SetTextColor(1, 0.5, 0.3)
 
   bossBar = bar(hud, 0.4, 0.7, 1)
   bossBar:SetSize(420, 14)
@@ -98,6 +101,14 @@ function UI.Init(frame)
     f:Hide()
     slots[i] = f
   end
+
+  -- Limit Break stacks, under the skill slots
+  limitText = font(hud, 10)
+  limitText:SetPoint("TOPLEFT", 8, -74)
+  limitText:SetJustifyH("LEFT")
+  limitText:SetWidth(420)
+  limitText:SetTextColor(1, 0.75, 0.3)
+  UI.limitText = limitText
 
   debugText = font(hud, 10)
   debugText:SetPoint("BOTTOMLEFT", 6, 6)
@@ -187,6 +198,30 @@ function UI.Init(frame)
   t.info = font(t, 13)
   t.info:SetPoint("BOTTOM", 0, 52)
   t.info:SetWidth(900)
+  -- Ascension selector for the highlighted class (shown once unlocked); anchored above the info line so the
+  -- class card grid can change size without moving it
+  local asc = CreateFrame("Frame", nil, t)
+  asc:SetSize(560, 44)
+  asc:SetPoint("BOTTOM", 0, 76)
+  asc.minus = CreateFrame("Button", nil, asc, "UIPanelButtonTemplate")
+  asc.minus:SetSize(26, 22)
+  asc.minus:SetPoint("TOP", -95, 0)
+  asc.minus:SetText("-")
+  asc.minus:SetScript("OnClick", function() ns.AscStep(-1) end)
+  asc.plus = CreateFrame("Button", nil, asc, "UIPanelButtonTemplate")
+  asc.plus:SetSize(26, 22)
+  asc.plus:SetPoint("TOP", 95, 0)
+  asc.plus:SetText("+")
+  asc.plus:SetScript("OnClick", function() ns.AscStep(1) end)
+  asc.label = font(asc, 14)
+  asc.label:SetPoint("TOP", 0, -3)
+  asc.label:SetWidth(150)
+  asc.twist = font(asc, 11, "")
+  asc.twist:SetPoint("TOP", 0, -27)
+  asc.twist:SetWidth(560)
+  asc.twist:SetTextColor(1, 0.6, 0.4)
+  asc:Hide()
+  t.asc = asc
   local tabs = { { "shop", "Shop" }, { "curses", "Curses" }, { "ach", "Achievements" }, { "guild", "Guild" } }
   t.tabs = {}
   for i, tb in ipairs(tabs) do
@@ -205,14 +240,19 @@ function UI.Init(frame)
   lt:SetPoint("CENTER", 0, 215)
   lt:SetText("Level Up!")
   lt:SetTextColor(1, 0.82, 0)
+  l.title = lt
   l.reroll = CreateFrame("Button", nil, l, "UIPanelButtonTemplate")
   l.reroll:SetSize(170, 26)
-  l.reroll:SetPoint("CENTER", -95, -262)
+  l.reroll:SetPoint("CENTER", -185, -262)
   l.reroll:SetScript("OnClick", function() ns.Reroll() end)
   l.skip = CreateFrame("Button", nil, l, "UIPanelButtonTemplate")
   l.skip:SetSize(170, 26)
-  l.skip:SetPoint("CENTER", 95, -262)
+  l.skip:SetPoint("CENTER", 0, -262)
   l.skip:SetScript("OnClick", function() ns.Skip() end)
+  l.banish = CreateFrame("Button", nil, l, "UIPanelButtonTemplate")
+  l.banish:SetSize(170, 26)
+  l.banish:SetPoint("CENTER", 185, -262)
+  l.banish:SetScript("OnClick", function() ns.BanishMode() end)
   for i = 1, 4 do
     local b = CreateFrame("Button", nil, l)
     b:SetSize(460, 76)
@@ -240,6 +280,7 @@ function UI.Init(frame)
     b.key = font(b, 14)
     b.key:SetPoint("TOPRIGHT", -8, -6)
     b.key:SetText(i)
+    b.edge = edge
     b:SetScript("OnClick", function() ns.Choose(i) end)
     choiceButtons[i] = b
   end
@@ -292,6 +333,31 @@ function UI.Init(frame)
   local again = font(o, 16)
   again:SetPoint("BOTTOM", 0, 30)
   again:SetText("|cff00ff00SPACE|r play again     |cffffd100C|r change class     |cffffd100ESC|r close")
+
+  -- victory at 10:00: cash out or keep going (Endless)
+  local v = panel("victory", frame)
+  v.title = font(v, 40)
+  v.title:SetPoint("CENTER", 0, 170)
+  v.title:SetText("Victory!")
+  v.title:SetTextColor(0.3, 1, 0.3)
+  v.sub = font(v, 15)
+  v.sub:SetPoint("CENTER", 0, 100)
+  v.sub:SetWidth(760)
+  v.cash = CreateFrame("Button", nil, v, "UIPanelButtonTemplate")
+  v.cash:SetSize(230, 30)
+  v.cash:SetPoint("CENTER", -130, 20)
+  v.cash:SetText("Cash out (C)")
+  v.cash:SetScript("OnClick", function() ns.CashOut() end)
+  v.go = CreateFrame("Button", nil, v, "UIPanelButtonTemplate")
+  v.go:SetSize(230, 30)
+  v.go:SetPoint("CENTER", 130, 20)
+  v.go:SetText("Keep going: Endless (E)")
+  v.go:SetScript("OnClick", function() ns.KeepGoing() end)
+  v.info = font(v, 13, "")
+  v.info:SetPoint("CENTER", 0, -60)
+  v.info:SetWidth(700)
+  v.info:SetText("Endless: the Scourge keeps growing stronger, the Frost Lich returns every 5 minutes and gold per kill rises "
+    .. "10% a minute. The run ends when you fall; your best time keeps the longest run.")
 
   -- chest
   local ch = panel("chest", frame)
@@ -408,19 +474,43 @@ function UI.TitleBest(db, selected)
   else
     panels.title.cont:Hide()
   end
+  UI.AscSelector(db, selected)
   for id, card in pairs(panels.title.cards) do
     local b = db.bestByClass and db.bestByClass[id]
-    card.best:SetText(b and string.format("Best %s, lv %d%s", fmtTime(b.t), b.level, b.won and "\n|cff00ff00victory|r" or "") or "")
+    card.best:SetText(b and string.format("Best %s, lv %d%s%s", fmtTime(b.t), b.level, (b.asc or 0) > 0 and (" A" .. b.asc) or "",
+      b.won and ((b.t or 0) > C.RUN_SECONDS and "\n|cff00ff00victory|r |cffff8040endless|r" or "\n|cff00ff00victory|r") or "") or "")
     if id == selected then card.edge:SetColorTexture(1, 0.82, 0, 1) else card.edge:SetColorTexture(0.4, 0.35, 0.25, 0.9) end
   end
 end
 
-function UI.LevelUp(S)
+-- the Ascension selector (- level +) for the highlighted class, shown once that class has unlocked A1
+function UI.AscSelector(db, cls)
+  local a = panels.title.asc
+  local top = db.asc and db.asc[cls] or 0
+  if top < 1 then a:Hide() return end
+  local sel = math.min(top, db.ascSel and db.ascSel[cls] or 0)
+  a.label:SetText(sel > 0 and string.format("|cffff8040Ascension %d|r / %d", sel, top) or string.format("Ascension off / %d", top))
+  if sel > 0 then
+    a.twist:SetText(string.format("A%d: %s%s.  Gold +%d%%", sel, C.ASCENSION[sel].text, sel > 1 and (" (and A1-A" .. (sel - 1) .. ")") or "",
+      floor(C.ASC_GOLD * sel * 100 + 0.5)))
+  else
+    a.twist:SetText("|cffaaaaaaHarder runs for more gold: each level adds a twist.|r")
+  end
+  if sel > 0 then a.minus:Enable() else a.minus:Disable() end
+  if sel < top then a.plus:Enable() else a.plus:Disable() end
+  a:Show()
+end
+
+function UI.LevelUp(S, banishMode)
   local l = panels.levelup
   l.reroll:SetText(string.format("Reroll (R)  %d left", S.rerolls or 0))
   l.skip:SetText(string.format("Skip (S)  %d left", S.skips or 0))
   if (S.rerolls or 0) > 0 then l.reroll:Enable() else l.reroll:Disable() end
   if (S.skips or 0) > 0 then l.skip:Enable() else l.skip:Disable() end
+  l.banish:SetText(banishMode and "Cancel banish (B)" or string.format("Banish (B)  %d left", S.banishes or 0))
+  if (S.banishes or 0) > 0 then l.banish:Enable() else l.banish:Disable() end
+  l.banish:SetShown((S.meta and (S.meta.banish or 0) > 0) or (S.banishes or 0) > 0)
+  l.title:SetText(banishMode and "Banish which card?" or "Level Up!")
   for i = 1, 4 do
     local b, c = choiceButtons[i], S.choices[i]
     if c then
@@ -428,6 +518,10 @@ function UI.LevelUp(S)
       b.name:SetText(name)
       b.desc:SetText(text)
       b.icon:SetTexture(icon)
+      local canBanish = banishMode and (c.kind == "weapon" or c.kind == "passive")
+      if canBanish then b.edge:SetColorTexture(1, 0.25, 0.2, 1)
+      elseif c.kind == "limit" then b.edge:SetColorTexture(1, 0.45, 0.1, 0.95)
+      else b.edge:SetColorTexture(0.75, 0.6, 0.2, 0.9) end
       b:Show()
     else
       b:Hide()
@@ -436,10 +530,33 @@ function UI.LevelUp(S)
   UI.Show("levelup")
 end
 
-function UI.Pause(reason)
+-- "Might +12%  Health +30  ..." for the HUD and the pause screen ("" with no stacks)
+function UI.LimitLine(S)
+  local parts = {}
+  for _, l in ipairs(C.LIMIT) do
+    local n = S and S.limit and S.limit[l.id] or 0
+    if n > 0 then parts[#parts + 1] = C.LimitLabel(l.id, n) end
+  end
+  return #parts > 0 and ("Limit Break: " .. table.concat(parts, "  ")) or ""
+end
+
+function UI.Pause(reason, S)
+  local lb = UI.LimitLine(S or ns.State())
   panels.pause.sub:SetText((reason and (reason .. "\n\n") or "") ..
-    "|cffffd100P|r / |cffffd100ESC|r resume     |cffffd100F6|r quick save     |cffffd100F9|r quick load     |cffffd100Q|r end run")
+    "|cffffd100P|r / |cffffd100ESC|r resume     |cffffd100F6|r quick save     |cffffd100F9|r quick load     |cffffd100Q|r end run" ..
+    (lb ~= "" and ("\n\n|cffffbf4d" .. lb .. "|r") or ""))
   UI.Show("pause")
+end
+
+-- 10:00: the win is recorded; cash out or keep going
+function UI.Victory(S, res)
+  res = res or {}
+  local v = panels.victory
+  local cd = C.CLASSES[S.class]
+  v.title:SetText("Victory!  |cff" .. hex(cd.color) .. cd.name .. "|r" .. ((S.asc or 0) > 0 and ("  |cffff8040A" .. S.asc .. "|r") or ""))
+  v.sub:SetText(string.format("You survived 10 minutes. Your win, best time and |cffffd100%d gold|r are banked.%s",
+    res.gold or 0, res.ascUnlocked and string.format("\n|cffff8040Ascension %d unlocked for %s!|r", res.ascUnlocked, cd.name) or ""))
+  UI.Show("victory")
 end
 
 -- results: time, level, kills, gold, damage per skill with DPS, new achievements
@@ -447,11 +564,15 @@ function UI.Over(S, won, res)
   res = res or {}
   local o = panels.over
   local cd = C.CLASSES[S.class]
-  o.title:SetText((won and "Victory!" or "You have fallen") .. "\n|cff" .. hex(cd.color) .. cd.name .. "|r")
+  local endless = Sim.EndlessTime(S)
+  o.title:SetText((won and "Victory!" or "You have fallen") .. "\n|cff" .. hex(cd.color) .. cd.name .. "|r"
+    .. ((S.asc or 0) > 0 and ("  |cffff8040A" .. S.asc .. "|r") or ""))
   o.title:SetTextColor(won and 0.3 or 1, won and 1 or 0.25, won and 0.3 or 0.25)
   local _, _, nc = C.CurseMult(S.curses)
-  o.stats:SetText(string.format("Survived %s   Level %d   Kills %d   Damage %d\n|cffffd100+%d gold|r (%d banked)%s%s",
-    fmtTime(S.t), S.p.level, S.kills, floor(S.dmgDone), res.gold or 0, ns.db and ns.db.gold or 0,
+  o.stats:SetText(string.format("Survived %s%s   Level %d   Kills %d   Damage %d\n|cffffd100+%d gold|r (%d banked)%s%s%s",
+    fmtTime(S.t), S.endless and string.format("  |cffff8040Endless +%d:%02d|r", floor(endless / 60), floor(endless) % 60) or "",
+    S.p.level, S.kills, floor(S.dmgDone), res.gold or 0, ns.db and ns.db.gold or 0,
+    (S.asc or 0) > 0 and ("   |cffff8040A" .. S.asc .. "|r") or "",
     nc > 0 and string.format("   |cffff6060%d curse%s|r", nc, nc > 1 and "s" or "") or "",
     res.newBest and "   |cffffd100New best run!|r" or ""))
   -- damage bars, biggest first
@@ -514,7 +635,10 @@ function UI.Update(S, elapsed, dbg)
   if sig ~= hud.sig or S ~= hud.S then
     hud.sig, hud.S = sig, S
     UI.Slots(S)
+    limitText:SetText(UI.LimitLine(S))
   end
+  local mt = ((S.asc or 0) > 0 and ("Ascension " .. S.asc) or "") .. (S.endless and (((S.asc or 0) > 0 and "   " or "") .. "Endless") or "")
+  if mt ~= hud.mt then hud.mt = mt; modeText:SetText(mt) end
   if banner.t > 0 then
     banner.t = banner.t - elapsed
     banner:SetAlpha(math.min(1, banner.t))
@@ -538,7 +662,7 @@ function UI.Slots(S)
   for k = i + 1, #slots do slots[k]:Hide() end
 end
 
-function UI.HideBoss() bossBar:Hide(); banner:Hide(); banner.t = 0; hud.lv, hud.sec, hud.k, hud.sig, hud.g = nil, nil, nil, nil, nil end
+function UI.HideBoss() bossBar:Hide(); banner:Hide(); banner.t = 0; hud.lv, hud.sec, hud.k, hud.sig, hud.g, hud.mt = nil, nil, nil, nil, nil, nil end
 
 
 ---------------------------------------------------------------------------
@@ -622,9 +746,9 @@ end
 ---------------------------------------------------------------------------
 -- class screen sub panels: shop, curses, achievements, guild
 ---------------------------------------------------------------------------
-local function subPanel(t, name, title)
+local function subPanel(t, name, title, width)
   local p = CreateFrame("Frame", nil, t)
-  p:SetSize(660, 540)
+  p:SetSize(width or 660, 540)
   p:SetPoint("TOP", 0, -64)
   p:SetFrameLevel(t:GetFrameLevel() + 10)
   p:EnableMouse(true)
@@ -641,7 +765,7 @@ local function subPanel(t, name, title)
   p.title:SetTextColor(1, 0.82, 0)
   p.head = font(p, 12, "")
   p.head:SetPoint("TOP", 0, -40)
-  p.head:SetWidth(620)
+  p.head:SetWidth((width or 660) - 40)
   local back = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
   back:SetSize(110, 22)
   back:SetPoint("BOTTOM", 0, 10)
@@ -673,14 +797,34 @@ local function row(p, i, h, top)
   return r
 end
 
+UI.SHOP_W, UI.SHOP_COL_W, UI.SHOP_ROW_H, UI.SHOP_TEXT_W = 940, 450, 46, 278
+
 function UI.InitSubs(t)
-  -- shop
-  local sp = subPanel(t, "shop", "Shop")
+  -- shop: two columns so every item fits at 1000x700
+  local sp = subPanel(t, "shop", "Shop", UI.SHOP_W)
+  local perCol = math.ceil(#C.SHOP / 2)
   for i, item in ipairs(C.SHOP) do
-    local r = row(sp, i, 44)
+    local col, ri = floor((i - 1) / perCol), (i - 1) % perCol
+    local h = UI.SHOP_ROW_H
+    local r = CreateFrame("Frame", nil, sp)
+    r:SetSize(UI.SHOP_COL_W, h - 4)
+    r:SetPoint("TOPLEFT", 15 + col * (UI.SHOP_COL_W + 10), -62 - ri * h)
+    r.icon = r:CreateTexture(nil, "ARTWORK")
+    r.icon:SetSize(h - 10, h - 10)
+    r.icon:SetPoint("LEFT", 4, 0)
+    r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    r.name = font(r, 13)
+    r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 8, 0)
+    r.name:SetWidth(UI.SHOP_TEXT_W)
+    r.name:SetJustifyH("LEFT")
+    r.desc = font(r, 11, "")
+    r.desc:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -3)
+    r.desc:SetWidth(UI.SHOP_TEXT_W)
+    r.desc:SetJustifyH("LEFT")
+    sp.rows[i] = r
     r.icon:SetTexture(item.icon)
     r.buy = CreateFrame("Button", nil, r, "UIPanelButtonTemplate")
-    r.buy:SetSize(130, 24)
+    r.buy:SetSize(110, 24)
     r.buy:SetPoint("RIGHT", -4, 0)
     r.buy:SetScript("OnClick", function()
       if ns.Buy(item.id) then UI.TitleBest(ns.db, ns.db.class) end
@@ -740,8 +884,10 @@ function UI.RefreshSub()
     for _, r in ipairs(p.rows) do
       local item = C.SHOP_BY_ID[r.id]
       local rank = db.meta[r.id] or 0
-      r.name:SetText(string.format("%s  |cffaaaaaa%d / %d|r", item.name, rank, item.max))
-      r.desc:SetText(item.text .. " per rank")
+      local top = C.ShopMax(r.id, rank)
+      r.name:SetText(string.format("%s  |cffaaaaaa%d / %d|r%s", item.name, rank, top,
+        rank >= item.max and item.prestige and "  |cffff8040prestige|r" or ""))
+      r.desc:SetText(item.text .. (item.max > 1 and " per rank" or ""))
       local cost = C.ShopCost(r.id, rank)
       if cost then
         r.buy:SetText(cost .. " gold")
@@ -783,9 +929,10 @@ function UI.RefreshSub()
       local r = list[i]
       if r then
         local cd = C.CLASSES[r.class]
-        l:SetText(string.format("%2d.  %s   |cff%s%s|r   %s   level %d   %d kills%s", i, r.name,
-          cd and hex(cd.color) or "cccccc", ns.Social.ClassName(r.class), fmtTime(r.t), r.level, r.kills,
-          r.won and "   |cff00ff00victory|r" or ""))
+        l:SetText(string.format("%2d.  %s   |cff%s%s|r%s   %s   level %d   %d kills%s%s", i, r.name,
+          cd and hex(cd.color) or "cccccc", ns.Social.ClassName(r.class), (r.asc or 0) > 0 and (" |cffff8040A" .. r.asc .. "|r") or "",
+          fmtTime(r.t), r.level, r.kills, r.won and not r.endless and "   |cff00ff00victory|r" or "",
+          (r.endless or 0) > 0 and string.format("  |cffff8040endless +%d:%02d|r", floor(r.endless / 60), r.endless % 60) or ""))
       else
         l:SetText(i == 1 and "|cff888888No results yet.|r" or "")
       end

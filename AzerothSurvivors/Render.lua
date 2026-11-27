@@ -261,6 +261,7 @@ local function getSprite(name, color)
   end
   t:SetBlendMode((not t.ok or GLOW[name]) and "ADD" or "BLEND")
   t:SetVertexColor(color[1], color[2], color[3])
+  if t.mirrored then t:SetTexCoord(0, 1, 0, 1); t.mirrored = nil end
   t.on = true
   t:Show()
   return t
@@ -373,9 +374,16 @@ function R.Fx(S, kind, a, b, c, d, e)
     ring(a, b, 50, { 1, 0.85, 0.2 }, 0.4)
   elseif kind == "swarm" then
     ns.UI.Banner("A swarm of bats closes in!", 0.9, 0.6, 1)
-  elseif kind == "boss" then
-    ns.UI.Banner("The Frost Lich has come for you!", 0.5, 0.8, 1)
+  elseif kind == "boss" then -- a = how many times it came before (Endless)
+    ns.UI.Banner((a or 0) > 0 and "The Frost Lich returns, stronger!" or "The Frost Lich has come for you!", 0.5, 0.8, 1)
     ns.Sfx("boss")
+  elseif kind == "enrage" then
+    ns.UI.Banner("The Frost Lich enrages!", 1, 0.35, 0.3)
+    ring(a, b, 120, { 1, 0.3, 0.2 }, 0.6)
+    ns.Sfx("boss")
+  elseif kind == "revive" then -- shop Revival: a bright flash
+    bombFlash.a = 0.7
+    ring(S.p.x, S.p.y, 160, { 1, 0.9, 0.5 }, 0.8)
   elseif kind == "evolve" then -- weapon
     local p = S.p
     ring(p.x, p.y, 120, a.def.color, 0.6)
@@ -414,6 +422,11 @@ function R.Kill(S, e)
   t.x1, t.y1, t.x2, t.y2, t.size, t.t0, t.dur, t.fade, t.grow = e.x, e.y, e.x, e.y + 10, d.size, now, 0.25, 1, 1.35
   t:SetRotation(0)
   t:SetSize(d.size, d.size)
+  -- mirrored like the enemy it replaces (art faces right unless FACES_LEFT)
+  if t.ok and (e.face < 0) ~= (FACES_LEFT[d.art or e.kind] or false) then
+    t:SetTexCoord(1, 0, 0, 1); t.mirrored = true
+  end
+  return t
 end
 
 function R.Heal(S, amt)
@@ -629,7 +642,8 @@ function R.Draw(S, elapsed)
       local list = orbTex[w.id]
       if not list then list = {}; orbTex[w.id] = list end
       list.seen = drawN
-      for k = 1, w.count do
+      local cnt = ns.Sim.Count(S, w)
+      for k = 1, cnt do
         local t = list[k]
         if not t then
           t = world:CreateTexture(nil, "OVERLAY", nil, 0)
@@ -644,7 +658,7 @@ function R.Draw(S, elapsed)
         place(t, (w.orbs[2 * k - 1] or p.x) + ox, (w.orbs[2 * k] or p.y) + oy)
         t:Show()
       end
-      for k = w.count + 1, #list do list[k]:Hide() end
+      for k = cnt + 1, #list do list[k]:Hide() end
     elseif d.type == "aura" then
       local t = auraTex[w.id]
       if not t then

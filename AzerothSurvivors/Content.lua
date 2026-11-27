@@ -348,10 +348,10 @@ local NEW_WEAPONS = {
   shadowbolt = {
     type = "proj", name = "Shadow Bolt", icon = "Interface\\Icons\\Spell_Shadow_ShadowBolt",
     desc = "Hurls bolts of shadow at the nearest enemies.", sprite = "shadowbolt", color = { 0.7, 0.4, 1 },
-    base = { dmg = 19, cd = 1.0, count = 1, speed = 360, pierce = 1, life = 1.5, size = 28 },
+    base = { dmg = 21, cd = 0.95, count = 1, speed = 360, pierce = 2, life = 1.5, size = 28 },
     levels = {
       [2] = { count = 1, text = "+1 bolt" },
-      [3] = { dmg = 7, text = "+7 damage" },
+      [3] = { dmg = 8, text = "+8 damage" },
       [4] = { pierce = 1, text = "Pierces +1 enemy" },
       [5] = { count = 1, cdMul = 0.85, text = "+1 bolt, -15% cooldown" },
       [6] = { dmg = 10, count = 1, text = "+10 damage, +1 bolt" },
@@ -667,13 +667,132 @@ C.SHOP = {
   { id = "skip",     name = "Skip",      icon = "Interface\\Icons\\Spell_Nature_TimeStop",    text = "+1 skip per run (S)",   max = 3, cost = 60,  grow = 1.8 },
   { id = "insight",  name = "Insight",   icon = "Interface\\Icons\\INV_Misc_Book_09",         text = "4 cards on level-up",   max = 1, cost = 600, grow = 1 },
 }
+-- 0.6: a bigger shop with steep prices, so gold always has a sink
+for _, s in ipairs({
+  { id = "cooldown", name = "Cooldown",  icon = "Interface\\Icons\\Spell_Nature_Bloodlust",   text = "-3% cooldowns",         max = 5, cost = 150, grow = 1.8 },
+  { id = "area",     name = "Area",      icon = "Interface\\Icons\\Spell_Arcane_ArcaneResilience", text = "+5% area",          max = 5, cost = 120, grow = 1.8 },
+  { id = "magnet",   name = "Magnet",    icon = "Interface\\Icons\\INV_Misc_Magnet",          text = "+10% pickup range",     max = 2, cost = 100, grow = 2.0 },
+  { id = "luck",     name = "Luck",      icon = "Interface\\Icons\\INV_Misc_Dice_02",         text = "Chests: 15% for +1 upgrade, more gold", max = 3, cost = 200, grow = 2.0 },
+  { id = "banish",   name = "Banish",    icon = "Interface\\Icons\\Spell_Shadow_Teleport",    text = "+1 banish per run (B)",  max = 3, cost = 150, grow = 2.0 },
+  { id = "revival",  name = "Revival",   icon = "Interface\\Icons\\Spell_Holy_Resurrection",  text = "+1 revive per run (50% health)", max = 2, cost = 800, grow = 2.5 },
+  { id = "amount",   name = "Amount",    icon = "Interface\\Icons\\Ability_UpgradeMoonGlaive", text = "+1 projectile/count on every skill", max = 1, cost = 5000, grow = 1 },
+}) do C.SHOP[#C.SHOP + 1] = s end
+-- Prestige: ranks 6-10 of the old stat items, sold once every base rank is owned, at a much higher price.
+C.PRESTIGE_RANKS, C.PRESTIGE_GROW, C.PRESTIGE_MUL = 5, 1.9, 1.5
+for _, id in ipairs({ "might", "maxhp", "recovery", "growth" }) do
+  for _, s in ipairs(C.SHOP) do if s.id == id then s.prestige = C.PRESTIGE_RANKS end end
+end
 C.SHOP_BY_ID = {}
 for _, s in ipairs(C.SHOP) do C.SHOP_BY_ID[s.id] = s end
 
+-- the highest rank on sale now: the base max, or base + prestige once the base ranks are all owned
+function C.ShopMax(id, rank)
+  local s = C.SHOP_BY_ID[id]
+  if not s then return 0 end
+  if s.prestige and (rank or 0) >= s.max then return s.max + s.prestige end
+  return s.max
+end
+
 function C.ShopCost(id, rank)
   local s = C.SHOP_BY_ID[id]
-  if not s or rank >= s.max then return nil end
-  return math.floor(s.cost * s.grow ^ rank)
+  if not s then return nil end
+  if rank < s.max then return math.floor(s.cost * s.grow ^ rank) end
+  if s.prestige and rank < s.max + s.prestige then
+    return math.floor(s.cost * s.grow ^ s.max * C.PRESTIGE_MUL * C.PRESTIGE_GROW ^ (rank - s.max))
+  end
+  return nil
+end
+
+---------------------------------------------------------------------------
+-- Limit Break (0.6): with nothing left to offer, level-ups offer small endless stacking bonuses.
+-- step = per stack; cap = most stacks (nil = none); every = the card is offered at most every Nth pick.
+---------------------------------------------------------------------------
+C.LIMIT = {
+  { id = "might",  name = "Might",    icon = "Interface\\Icons\\Spell_Nature_Strength",     text = "+3% damage",       step = 3,  unit = "%" },
+  { id = "maxhp",  name = "Health",   icon = "Interface\\Icons\\Spell_Holy_WordFortitude",  text = "+10 max health",   step = 10, unit = "" },
+  { id = "crit",   name = "Crit",     icon = "Interface\\Icons\\Ability_Marksmanship",       text = "+2% critical strike", step = 2, unit = "%" },
+  { id = "haste",  name = "Cooldown", icon = "Interface\\Icons\\Spell_Nature_Bloodlust",     text = "-2% cooldowns",    step = -2, unit = "%" },
+  { id = "area",   name = "Area",     icon = "Interface\\Icons\\Spell_Arcane_ArcaneResilience", text = "+5% area",      step = 5,  unit = "%" },
+  { id = "speed",  name = "Speed",    icon = "Interface\\Icons\\Ability_Rogue_Sprint",       text = "+4% move speed",   step = 4,  unit = "%", cap = 10 },
+  { id = "magnet", name = "Pickup",   icon = "Interface\\Icons\\INV_Misc_Coin_01",           text = "+5% pickup range", step = 5,  unit = "%" },
+  { id = "amount", name = "Amount",   icon = "Interface\\Icons\\Ability_UpgradeMoonGlaive",  text = "+1 projectile on bolt, fan and missile skills", step = 1, unit = "", every = 5 },
+}
+C.LIMIT_BY_ID = {}
+for _, l in ipairs(C.LIMIT) do C.LIMIT_BY_ID[l.id] = l end
+C.LIMIT_HASTE_FLOOR = 0.5 -- cooldowns never drop below half
+C.LIMIT_AMOUNT_TYPES = { proj = true, fan = true, missile = true }
+-- skill types whose `count` the shop's Amount raises
+C.COUNT_TYPES = { proj = true, burst = true, orbit = true, strike = true, missile = true, zone = true, dot = true, beam = true,
+  fan = true, trap = true, pet = true }
+
+-- "Might +12%": a Limit Break stack as shown on cards and the HUD
+function C.LimitLabel(id, n)
+  local l = C.LIMIT_BY_ID[id]
+  if not l then return "" end
+  local v = l.step * (n or 0)
+  return string.format("%s %s%d%s", l.name, v >= 0 and "+" or "", v, l.unit)
+end
+
+---------------------------------------------------------------------------
+-- Endless (0.6): after the win at 10:00 the run may go on. Scaling past RUN_SECONDS is faster,
+-- the boss returns every ENDLESS_BOSS_EVERY seconds (stronger each time), gold per kill grows.
+---------------------------------------------------------------------------
+C.ENDLESS = {
+  bossEvery = 300,      -- the Frost Lich returns at 15:00, 20:00, ...
+  bossHp = 1.0,         -- each return: hp x (1 + bossHp * n)
+  bossDmg = 0.3,        -- each return: damage x (1 + bossDmg * n)
+  hpRamp = 240,         -- enemy health x (1 + d / hpRamp + (d / hpRamp2)^2), d = t - 600, on top of Sim.HpScale
+  hpRamp2 = 300,
+  speedRamp = 1000,     -- enemy speed x (1 + d / speedRamp), at most speedMax: no outrunning them forever
+  speedMax = 1.6,
+  ccRamp = 600,         -- roots and slows last 1 / (1 + d / ccRamp) as long (half at 20:00)
+  dmgRamp = 300,        -- enemy damage x (1 + (t - 600) / dmgRamp) on top of the usual growth
+  capPerSec = 0.5,      -- the live enemy cap grows this much per second ...
+  capMax = 150,         -- ... up to this many more
+  goldPerMin = 0.10,    -- gold per kill +10% per minute past 10:00
+}
+
+---------------------------------------------------------------------------
+-- Ascension (0.6): per class, unlocked by a win with all four curses; each win at the top level unlocks the
+-- next, up to A10. Level n has every twist up to n. Gold +20% per level.
+---------------------------------------------------------------------------
+C.ASC_MAX = 10
+C.ASC_GOLD = 0.20
+-- every level also makes enemies (bosses too) tougher, gently at first: health x (1 + ASC_HP * n^2),
+-- damage x (1 + ASC_DMG * n^2): A1 +3% / +2.5%, A5 +75% / +63%, A10 x4 / x3.5, so A10 stays hard with a full shop
+C.ASC_HP, C.ASC_DMG = 0.03, 0.025
+C.ASCENSION = {
+  { text = "Elites every 45 s" },
+  { text = "Enemies +10% speed" },
+  { text = "The Frost Lich comes at 7:00" },
+  { text = "One card fewer on level-up (min 2)" },
+  { text = "Enemy bolts hit 50% harder" },
+  { text = "Potions and healing heal half" },
+  { text = "Elites +50% health" },
+  { text = "+25% spawn rate" },
+  { text = "Chests give one upgrade fewer (min 1)" },
+  { text = "The Frost Lich enrages at half health" },
+}
+
+-- the twists of level n as Sim settings
+function C.AscRules(n)
+  n = math.max(0, math.min(C.ASC_MAX, math.floor(tonumber(n) or 0)))
+  return {
+    level = n,
+    eliteEvery = n >= 1 and 45 or nil,
+    eSpeed = n >= 2 and 1.10 or 1,
+    bossAt = n >= 3 and 420 or nil,
+    choicesLess = n >= 4 and 1 or 0,
+    boltDmg = n >= 5 and 1.5 or 1,
+    healMul = n >= 6 and 0.5 or 1,
+    eliteHp = n >= 7 and 1.5 or 1,
+    spawn = n >= 8 and 1.25 or 1,
+    chestLess = n >= 9 and 1 or 0,
+    enrage = n >= 10,
+    gold = 1 + C.ASC_GOLD * n,
+    hp = 1 + C.ASC_HP * n * n,
+    dmg = 1 + C.ASC_DMG * n * n,
+  }
 end
 
 ---------------------------------------------------------------------------
