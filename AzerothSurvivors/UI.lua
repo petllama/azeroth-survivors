@@ -335,7 +335,7 @@ function UI.Init(frame)
   -- achievement toast (above every panel)
   toast = CreateFrame("Frame", nil, frame)
   toast:SetSize(320, 84)
-  toast:SetPoint("TOP", 0, -80)
+  toast:SetPoint("TOPRIGHT", -14, -34) -- clear of the results screen's title and stats lines
   toast:SetFrameLevel(frame:GetFrameLevel() + 40)
   local tbg = toast:CreateTexture(nil, "BACKGROUND")
   tbg:SetAllPoints()

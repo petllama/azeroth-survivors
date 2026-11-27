@@ -434,7 +434,7 @@ local function spawnEnemy(S, kind, x, y, force)
   e.root, e.dot, e.dotT, e.pdps, e.pT, e.dotAcc = 0, 0, 0, 0, 0, 0
   e.dotSrc, e.pSrc = nil, nil
   e.dead, e.face, e.tex = false, 1, nil
-  e.aiS, e.aiT, e.ux, e.uy, e.corr, e.gone = 0, 0, 0, 0, nil, false -- ai state, corruption, silent removal
+  e.aiS, e.aiT, e.ux, e.uy, e.corr, e.corrGen, e.gone = 0, 0, 0, 0, nil, nil, false -- ai state, corruption, silent removal
   S.nE = S.nE + 1
   S.enemies[S.nE] = e
   if d.boss then S.boss = e end
@@ -974,7 +974,7 @@ function W.dot(S, w, dt)
     for _ = 1, 3 do -- prefer enemies not yet cursed
       if e.corr and not e.dead then e = q[random(n)] else break end
     end
-    e.corr = w
+    e.corr, e.corrGen = w, 0
     damage(S, e, w.dmg, nil, nil, w.dot, w.dotDur)
     S.hooks.fx(S, "curse", e.x, e.y, 0, w)
   end
@@ -1345,8 +1345,10 @@ local function stepDeaths(S)
       if e.kind == "goblin" then S.hooks.fx(S, "goblinKilled", e.x, e.y) end -- its coins drop in damage()
       if d.ai == "static" then dropItem(S, pickWeighted(C.EVENTS.pickups), e.x, e.y) end
       local w = e.corr
-      if w then
-        e.corr = nil
+      local gen = e.corrGen or 0
+      e.corr, e.corrGen = nil, nil
+      -- a curse jumps at most w.jumps times from where it was cast, weaker each jump (no chain across the swarm)
+      if w and gen < (w.jumps or 1) then
         S.curSrc = w.id
         local n = query(S, e.x, e.y, w.range, q)
         local c = 0
@@ -1355,9 +1357,10 @@ local function stepDeaths(S)
           if c >= w.spread then break end
           if not o.corr then
             c = c + 1
-            o.corr = w
+            o.corr, o.corrGen = w, gen + 1
             S.hooks.fx(S, "spread", e.x, e.y, o.x, o.y, w)
-            damage(S, o, w.dmg, nil, nil, w.dot, w.dotDur)
+            local f = 0.75 ^ (gen + 1)
+            damage(S, o, w.dmg * f, nil, nil, w.dot * f, w.dotDur)
           end
         end
       end
