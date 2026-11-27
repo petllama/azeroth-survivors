@@ -172,20 +172,30 @@ function Sim.AddPassive(S, id)
   elseif d.stat == "area" then p.area = p.area + d.add end
 end
 
--- skills a class may take: its kit, then (with a 6th weapon slot unlocked) other classes' skills
-local foreignCache
+-- skills a class may take: its kit, then (with a 6th weapon slot unlocked) other classes' skills.
+-- A hidden class (cd.unlock) adds its skills only when S.unlocks[cd.unlock] is set.
+local foreignCache = {}
 local function foreignSkills(S)
-  if not foreignCache then
-    foreignCache = {}
+  local key = ""
+  for _, cid in ipairs(C.CLASS_ORDER) do
+    local cd = C.CLASSES[cid]
+    if cd and cd.unlock and S.unlocks[cd.unlock] then key = key .. cid .. ";" end
+  end
+  local list = foreignCache[key]
+  if not list then
+    list = {}
+    foreignCache[key] = list
     local seen = {}
     for _, cid in ipairs(C.CLASS_ORDER) do
       local cd = C.CLASSES[cid]
-      for _, id in ipairs(cd and cd.kit or {}) do
-        if not seen[id] and C.WEAPONS[id] and not C.WEAPONS[id].evolved then seen[id] = true; foreignCache[#foreignCache + 1] = id end
+      if cd and (not cd.unlock or S.unlocks[cd.unlock]) then
+        for _, id in ipairs(cd.kit or {}) do
+          if not seen[id] and C.WEAPONS[id] and not C.WEAPONS[id].evolved then seen[id] = true; list[#list + 1] = id end
+        end
       end
     end
   end
-  return foreignCache
+  return list
 end
 
 -- S.nChoices (3, 4 with Insight) weighted picks without replacement; upgrades of owned things weigh double.
@@ -880,6 +890,11 @@ local HIT = {}
 function HIT.chill(S, pr, e)
   local sl = pr.w.slow or 1
   if e.slow < sl then e.slow = sl end
+end
+-- heals the player per enemy hit (Death Coil); w.heal per hit, like Drain Life's per-tick heal
+function HIT.heal(S, pr, e)
+  local p = S.p
+  if p.hp < p.maxhp then p.hp = min(p.maxhp, p.hp + (pr.w.heal or 0)) end
 end
 function HIT.explode(S, pr, e)
   local w, q = pr.w, S.q

@@ -3,7 +3,7 @@
 -- Usage: CLASS=paladin PREFER=hammers lua5.1 tests/idle_test.lua [seeds]
 local ROOT = (arg[0]:match("^(.*)/tests/") or ".") .. "/AzerothSurvivors/"
 local ns = {}
-for _, f in ipairs({ "Content.lua", "Sim.lua" }) do assert(loadfile(ROOT .. f))("AzerothSurvivors", ns) end
+for _, f in ipairs({ "Content.lua", "ContentDK.lua", "Sim.lua" }) do assert(loadfile(ROOT .. f))("AzerothSurvivors", ns) end
 local Sim = ns.Sim
 local class, prefer = os.getenv("CLASS") or "paladin", os.getenv("PREFER") or "hammers"
 local seeds = tonumber(arg[1]) or 4

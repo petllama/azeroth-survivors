@@ -3,7 +3,7 @@
 -- Prints survival, level, kills, and per-step timing so balance and speed can be checked offline.
 local ROOT = (arg[0]:match("^(.*)/tests/") or ".") .. "/AzerothSurvivors/"
 local ns = {}
-for _, f in ipairs({ "Content.lua", "Sim.lua" }) do assert(loadfile(ROOT .. f))("AzerothSurvivors", ns) end
+for _, f in ipairs({ "Content.lua", "ContentDK.lua", "Sim.lua" }) do assert(loadfile(ROOT .. f))("AzerothSurvivors", ns) end
 local Sim, C = ns.Sim, ns.Content
 
 local seed = tonumber(arg[1]) or 1
@@ -13,14 +13,14 @@ local class = os.getenv("CLASS") or "paladin"
 if os.getenv("VACUUM") then C.PLAYER.magnet = 3000 end
 math.randomseed(seed)
 
-local KEEP = (class == "paladin" or class == "rogue") and 75 or 130 -- melee classes fight up close
+local KEEP = (class == "paladin" or class == "rogue" or class == "deathknight") and 75 or 130 -- melee classes fight up close
 -- META=max buys every shop rank; META=might:3,armor:1 picks ranks. CURSES=horde,brutal turns curses on.
 local meta, curses = {}, {}
 local mv = os.getenv("META")
 if mv == "max" then for _, s in ipairs(C.SHOP) do meta[s.id] = s.max end
 elseif mv then for k, v in mv:gmatch("(%w+):(%d+)") do meta[k] = tonumber(v) end end
 for c in (os.getenv("CURSES") or ""):gmatch("%w+") do curses[c] = true end
-local S = Sim.New({ class = class, zone = os.getenv("ZONE"), viewR = 560, stress = mode == "stress", cap = mode == "stress" and cap or nil, meta = meta, curses = curses })
+local S = Sim.New({ class = class, zone = os.getenv("ZONE"), viewR = tonumber(os.getenv("VIEWR")) or 560, stress = mode == "stress", cap = mode == "stress" and cap or nil, meta = meta, curses = curses })
 local dt = 1 / 60
 local clock = os.clock
 local worst, total, steps = 0, 0, 0
