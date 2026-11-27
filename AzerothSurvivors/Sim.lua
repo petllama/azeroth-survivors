@@ -702,7 +702,8 @@ function W.orbit(S, w, dt)
         e.orbT = S.t
         local dx, dy = e.x - p.x, e.y - p.y
         local d = sqrt(dx * dx + dy * dy) + 0.01
-        damage(S, e, w.dmg, dx / d * 90, dy / d * 90)
+        local kb = w.knock or 90
+        damage(S, e, w.dmg, dx / d * kb, dy / d * kb)
       end
     end
   end

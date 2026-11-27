@@ -120,12 +120,12 @@ C.WEAPONS = {
   hammers = {
     type = "orbit", name = "Blessed Hammers", icon = "Interface\\Icons\\Spell_Holy_SealOfMight",
     desc = "Holy hammers circle you.", sprite = "hammer", spinSprite = true, color = { 1, 0.85, 0.4 },
-    base = { dmg = 10, count = 2, radius = 80, spin = 3.0, hitcd = 0.55, size = 28 },
+    base = { dmg = 6, count = 1, radius = 80, spin = 2.4, hitcd = 0.8, size = 28, knock = 25 },
     levels = {
       [2] = { count = 1, text = "+1 hammer" },
-      [3] = { dmg = 5, radius = 15, text = "+5 damage, wider orbit" },
+      [3] = { dmg = 3, radius = 15, text = "+3 damage, wider orbit" },
       [4] = { count = 1, text = "+1 hammer" },
-      [5] = { spin = 1.2, dmg = 5, text = "Faster, +5 damage" },
+      [5] = { spin = 0.6, dmg = 5, text = "Faster, +5 damage" },
       [6] = { count = 2, text = "+2 hammers" },
     },
   },
@@ -582,8 +582,8 @@ local EVO = {
   },
   hammers_evo = {
     type = "orbit", name = "Hammer of the Righteous", icon = "Interface\\Icons\\Ability_Paladin_HammeroftheRighteous",
-    desc = "Evolved Blessed Hammers: a ring of eight heavy hammers.", sprite = "hammer", spinSprite = true, color = { 1, 0.9, 0.5 },
-    base = { dmg = 24, count = 8, radius = 110, spin = 4.5, hitcd = 0.4, size = 34 },
+    desc = "Evolved Blessed Hammers: a ring of six heavy hammers.", sprite = "hammer", spinSprite = true, color = { 1, 0.9, 0.5 },
+    base = { dmg = 16, count = 6, radius = 105, spin = 3.4, hitcd = 0.6, size = 34, knock = 40 },
   },
   avenger_evo = {
     type = "chain", name = "Holy Avenger", icon = "Interface\\Icons\\Ability_Paladin_HolyAvenger",
