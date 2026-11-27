@@ -13,14 +13,14 @@ local class = os.getenv("CLASS") or "paladin"
 if os.getenv("VACUUM") then C.PLAYER.magnet = 3000 end
 math.randomseed(seed)
 
-local KEEP = (class == "druid") and 130 or 75 -- melee classes fight up close
+local KEEP = (class == "paladin" or class == "rogue") and 75 or 130 -- melee classes fight up close
 -- META=max buys every shop rank; META=might:3,armor:1 picks ranks. CURSES=horde,brutal turns curses on.
 local meta, curses = {}, {}
 local mv = os.getenv("META")
 if mv == "max" then for _, s in ipairs(C.SHOP) do meta[s.id] = s.max end
 elseif mv then for k, v in mv:gmatch("(%w+):(%d+)") do meta[k] = tonumber(v) end end
 for c in (os.getenv("CURSES") or ""):gmatch("%w+") do curses[c] = true end
-local S = Sim.New({ class = class, viewR = 560, stress = mode == "stress", cap = mode == "stress" and cap or nil, meta = meta, curses = curses })
+local S = Sim.New({ class = class, zone = os.getenv("ZONE"), viewR = 560, stress = mode == "stress", cap = mode == "stress" and cap or nil, meta = meta, curses = curses })
 local dt = 1 / 60
 local clock = os.clock
 local worst, total, steps = 0, 0, 0
@@ -35,6 +35,18 @@ local function bot()
     local dx, dy = p.x - e.x, p.y - e.y
     local d2 = dx * dx + dy * dy + 1
     if d2 < KEEP * KEEP then ax, ay = ax + dx / d2, ay + dy / d2 end
+  end
+  -- sidestep enemy bolts heading this way (move off their line)
+  for i = 1, (S.nEB or 0) do
+    local b = S.ebolts[i]
+    local dx, dy = p.x - b.x, p.y - b.y
+    local d2 = dx * dx + dy * dy + 1
+    if d2 < 100 * 100 and dx * b.vx + dy * b.vy > 0 then
+      local nx, ny = -b.vy, b.vx
+      local side = (dx * nx + dy * ny) >= 0 and 1 or -1
+      local l = math.sqrt(nx * nx + ny * ny) + 0.01
+      ax, ay = ax + side * nx / l / math.sqrt(d2) * 0.6, ay + side * ny / l / math.sqrt(d2) * 0.6
+    end
   end
   -- walk toward the nearest gem (players vacuum XP)
   local gx, gy, gd = 0, 0, math.huge
@@ -93,5 +105,6 @@ table.sort(dmg, function(a, b) return a[2] > b[2] end)
 local dl = {}
 for i, e in ipairs(dmg) do dl[i] = string.format("%s %.0f%%", e[1], e[2] * 100 / math.max(1, S.dmgDone)) end
 print(string.format("  gold %d  chests %d  evolved %d  damage: %s", S.gold, S.chests or 0, S.nEvolved, table.concat(dl, " ")))
+print(string.format("  zone %s", tostring(S.zone)))
 print("  weapons: " .. table.concat(weapons, " ") .. "   passives: " .. table.concat(passives, " "))
 print(string.format("  step ms: avg %.3f worst %.3f  (%s, lua mem %.0f KB)", total / steps, worst, _VERSION, collectgarbage("count")))

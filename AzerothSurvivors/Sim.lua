@@ -92,6 +92,7 @@ function Sim.New(opts)
   end
   p.maxhp = floor(p.maxhp + 0.5)
   p.hp = p.maxhp
+  Sim.InitContent(S, opts)
   Sim.AddWeapon(S, opts.weapon or cd.start)
   return S
 end
@@ -433,6 +434,7 @@ local function spawnEnemy(S, kind, x, y, force)
   e.root, e.dot, e.dotT, e.pdps, e.pT, e.dotAcc = 0, 0, 0, 0, 0, 0
   e.dotSrc, e.pSrc = nil, nil
   e.dead, e.face, e.tex = false, 1, nil
+  e.aiS, e.aiT, e.ux, e.uy, e.corr, e.gone = 0, 0, 0, 0, nil, false -- ai state, corruption, silent removal
   S.nE = S.nE + 1
   S.enemies[S.nE] = e
   if d.boss then S.boss = e end
@@ -448,16 +450,17 @@ local function ringPos(S, dist)
   return p.x + cos(a) * dist, p.y + sin(a) * dist
 end
 
-local function pickKind(t)
+-- zmix: the zone theme's weight multipliers (C.ZONES[z].mix), or nil
+local function pickKind(t, zmix)
   local mix = C.WAVES[1].mix
   for i = #C.WAVES, 1, -1 do
     if t >= C.WAVES[i].t then mix = C.WAVES[i].mix; break end
   end
   local total = 0
-  for _, wt in pairs(mix) do total = total + wt end
+  for kind, wt in pairs(mix) do total = total + wt * (zmix and zmix[kind] or 1) end
   local r = random() * total
   for kind, wt in pairs(mix) do
-    r = r - wt
+    r = r - wt * (zmix and zmix[kind] or 1)
     if r <= 0 then return kind end
   end
   return "ghoul"
@@ -505,11 +508,12 @@ local function damage(S, e, amt, kx, ky, dot, dotDur, isDot)
       if pw.dps > e.pdps or e.pT < pw.dur then e.pdps, e.pT, e.pSrc = pw.dps, pw.dur, pw.id end
     end
   end
+  local dealt = min(amt, max(0, e.hp)) -- overkill is not credited (a bomb on a pack of 10 hp mobs)
   e.hp = e.hp - amt
   e.flash = 0.12
-  S.dmgDone = S.dmgDone + amt
+  S.dmgDone = S.dmgDone + dealt
   local src = S.curSrc or "other"
-  S.dmgBy[src] = (S.dmgBy[src] or 0) + amt
+  S.dmgBy[src] = (S.dmgBy[src] or 0) + dealt
   if kx and not e.def.boss then
     local k = e.def.elite and 0.3 or 1
     e.kx, e.ky = e.kx + kx * k, e.ky + ky * k
@@ -553,7 +557,7 @@ local function hurtPlayer(S, e)
   local dmg = max(1, e.dmg - p.armor)
   S.lastHit = e
   p.hp = p.hp - dmg
-  if S.thorns then
+  if S.thorns and e.def then -- not on enemy projectiles
     local prev = S.curSrc
     S.curSrc = S.thorns.id
     damage(S, e, S.thorns.reflect)
@@ -815,6 +819,560 @@ local function stepImpacts(S, dt)
 end
 
 ---------------------------------------------------------------------------
+-- content (0.5): new weapon types, enemy AI, enemy projectiles, zones, traps, map events, pickups
+---------------------------------------------------------------------------
+local atan2, abs = math.atan2, math.abs
+
+function Sim.InitContent(S, opts)
+  S.ebolts, S.nEB, S.ebPool = {}, 0, {}   -- enemy projectiles (transient: not saved)
+  S.zones, S.nZ, S.zonePool = {}, 0, {}   -- ground areas (Blizzard, Rain of Fire, Volley; transient)
+  S.traps, S.nTr, S.trapPool = {}, 0, {}  -- Explosive Traps (transient)
+  S.zone = opts.zone and C.ZONES[opts.zone] and opts.zone or nil
+  S.zdef = S.zone and C.ZONES[S.zone] or nil
+  S.ev = { ring = 1, goblin = 1, brazier = C.EVENTS.brazierFirst }
+  S.gold = S.gold or 0
+end
+
+-- event cursors from a save, or (older saves) the ones already past at S.t
+function Sim.RestoreEvents(S, ev)
+  local E = C.EVENTS
+  if type(ev) == "table" and ev[1] then
+    S.ev.ring, S.ev.goblin, S.ev.brazier = ev[1], ev[2], ev[3]
+    return
+  end
+  local r, g = 1, 1
+  while E.rings[r] and E.rings[r] <= S.t do r = r + 1 end
+  while E.goblins[g] and E.goblins[g] <= S.t do g = g + 1 end
+  S.ev.ring, S.ev.goblin, S.ev.brazier = r, g, max(S.t + 5, E.brazierFirst)
+end
+
+local function lastProj(S) return S.projs[S.nP] end
+
+-- arcane missiles: turn toward the target (or the nearest enemy when it died)
+local function steer(S, pr, dt)
+  local t = pr.tgt
+  if not t or t.dead then
+    local q = S.q
+    local n = query(S, pr.x, pr.y, 260, q)
+    local bd = math.huge
+    t = nil
+    for k = 1, n do
+      local e = q[k]
+      local dx, dy = e.x - pr.x, e.y - pr.y
+      local d2 = dx * dx + dy * dy
+      if d2 < bd and e.lastProj ~= pr.id then t, bd = e, d2 end
+    end
+    pr.tgt = t
+    if not t then return end
+  end
+  local w = pr.w
+  local cur = atan2(pr.vy, pr.vx)
+  local da = (atan2(t.y - pr.y, t.x - pr.x) - cur + math.pi) % TAU - math.pi
+  local mt = w.turn * dt
+  if da > mt then da = mt elseif da < -mt then da = -mt end
+  cur = cur + da
+  pr.vx, pr.vy = cos(cur) * w.speed, sin(cur) * w.speed
+end
+
+-- on-hit effects of projectiles (def.hit)
+local HIT = {}
+function HIT.chill(S, pr, e)
+  local sl = pr.w.slow or 1
+  if e.slow < sl then e.slow = sl end
+end
+function HIT.explode(S, pr, e)
+  local w, q = pr.w, S.q
+  local R = w.radius * S.p.area
+  S.curSrc = pr.src or w.id
+  local n = query(S, e.x, e.y, R, q)
+  for k = 1, n do
+    local o = q[k]
+    if o ~= e then damage(S, o, pr.dmg * w.splash) end
+  end
+  S.hooks.fx(S, "impact", e.x, e.y, R, w)
+end
+
+-- homing missiles launched in a spread in front of you (Arcane Missiles)
+function W.missile(S, w, dt)
+  if not ready(S, w, dt) then return end
+  local p, T = S.p, S.targets
+  local nT = nearest(S, p.x, p.y, w.count, S.viewR * 0.8)
+  if nT == 0 then w.timer = 0.2; return end
+  local a0 = atan2(T[1].y - p.y, T[1].x - p.x)
+  for k = 1, w.count do
+    local a = a0 + (k - (w.count + 1) / 2) * 0.35 + (random() - 0.5) * 0.3
+    spawnProj(S, p.x, p.y, cos(a) * w.speed, sin(a) * w.speed, w)
+    local pr = lastProj(S)
+    pr.src, pr.tgt = w.id, T[((k - 1) % nT) + 1]
+  end
+end
+
+-- a fan of projectiles toward the nearest enemy (Multi-Shot)
+function W.fan(S, w, dt)
+  if not ready(S, w, dt) then return end
+  local p, T = S.p, S.targets
+  local a
+  if nearest(S, p.x, p.y, 1, S.viewR * 0.9) > 0 then a = atan2(T[1].y - p.y, T[1].x - p.x) else a = atan2(p.fy, p.fx) end
+  local n = w.count
+  for k = 1, n do
+    local b = a + (n > 1 and ((k - 1) / (n - 1) - 0.5) * w.spread or 0)
+    spawnProj(S, p.x, p.y, cos(b) * w.speed, sin(b) * w.speed, w)
+    lastProj(S).src = w.id
+  end
+end
+
+-- the densest spot among a few random enemies near you (Blizzard, Rain of Fire, Volley)
+local function clusterPoint(S, R)
+  local p, q = S.p, S.q
+  local n = query(S, p.x, p.y, S.viewR * 0.55, q)
+  if n == 0 then return nil end
+  local bx, by, bn = nil, nil, -1
+  for _ = 1, min(n, 6) do
+    local e = q[random(n)]
+    local m = query(S, e.x, e.y, R, S.q2)
+    if m > bn then bx, by, bn = e.x, e.y, m end
+  end
+  return bx, by
+end
+
+local function addZone(S, w, x, y, R)
+  local z = tremove(S.zonePool) or {}
+  z.x, z.y, z.r, z.t, z.dur, z.delay, z.acc = x, y, R, w.dur, w.dur, w.delay or 0, 0
+  z.w, z.src, z.dead, z.tex = w, w.id, false, nil
+  S.nZ = S.nZ + 1
+  S.zones[S.nZ] = z
+  if z.delay > 0 then S.hooks.fx(S, "zonefall", x, y, z.delay, w) end
+end
+
+-- ground areas that tick damage (and slow) for a while
+function W.zone(S, w, dt)
+  w.timer = w.timer - dt
+  if w.timer > 0 then return end
+  local R = w.radius * S.p.area
+  local placed = false
+  for _ = 1, w.count do
+    local x, y = clusterPoint(S, R)
+    if not x then break end
+    placed = true
+    addZone(S, w, x + (random() - 0.5) * R * 0.5, y + (random() - 0.5) * R * 0.5, R)
+  end
+  w.timer = placed and w.cd * S.p.haste or 0.3
+end
+
+-- a curse (damage over time) that jumps to nearby enemies when its victim dies (Corruption)
+function W.dot(S, w, dt)
+  w.timer = w.timer - dt
+  if w.timer > 0 then return end
+  local p, q = S.p, S.q
+  local n = query(S, p.x, p.y, S.viewR * 0.55, q)
+  if n == 0 then w.timer = 0.2; return end
+  w.timer = w.cd * p.haste
+  S.curSrc = w.id
+  for _ = 1, w.count do
+    local e = q[random(n)]
+    for _ = 1, 3 do -- prefer enemies not yet cursed
+      if e.corr and not e.dead then e = q[random(n)] else break end
+    end
+    e.corr = w
+    damage(S, e, w.dmg, nil, nil, w.dot, w.dotDur)
+    S.hooks.fx(S, "curse", e.x, e.y, 0, w)
+  end
+end
+
+-- channel on the nearest enemies, healing you per tick (Drain Life)
+function W.beam(S, w, dt)
+  if not ready(S, w, dt) then return end
+  local p, T = S.p, S.targets
+  local n = nearest(S, p.x, p.y, w.count, w.range * p.area)
+  if n == 0 then return end
+  S.curSrc = w.id
+  for k = 1, n do
+    local e = T[k]
+    S.hooks.fx(S, "drain", p.x, p.y, e.x, e.y, w)
+    damage(S, e, w.dmg)
+  end
+  if p.hp < p.maxhp then p.hp = min(p.maxhp, p.hp + w.heal * n) end
+end
+
+-- mines dropped near you; armed after 0.5 s, they explode when an enemy steps close (Explosive Trap)
+function W.trap(S, w, dt)
+  if not ready(S, w, dt) then return end
+  local p, mine = S.p, 0
+  for i = 1, S.nTr do if S.traps[i].src == w.id then mine = mine + 1 end end
+  if mine >= w.count then w.timer = 0.3; return end
+  local tr = tremove(S.trapPool) or {}
+  local a, d = random() * TAU, 25 + random() * 55
+  tr.x, tr.y, tr.arm, tr.life, tr.w, tr.src, tr.dead, tr.tex = p.x + cos(a) * d, p.y + sin(a) * d, 0.5, w.life, w, w.id, false, nil
+  S.nTr = S.nTr + 1
+  S.traps[S.nTr] = tr
+end
+
+-- minions with their own position: ranged ones hover near you and shoot, melee ones chase and bite (Imp, Wolf)
+function W.pet(S, w, dt)
+  local p = S.p
+  local pets = w.pets
+  if not pets then pets = {}; w.pets = pets end
+  for k = #pets + 1, w.count do
+    local a = random() * TAU
+    pets[k] = { x = p.x + cos(a) * 40, y = p.y + sin(a) * 40, cd = 0.4, face = 1, moving = false, re = 0 }
+  end
+  for k = w.count + 1, #pets do pets[k] = nil end
+  S.curSrc = w.id
+  local melee = w.def.mode == "melee"
+  for k = 1, w.count do
+    local pet = pets[k]
+    pet.cd = pet.cd - dt
+    local ddx, ddy = p.x - pet.x, p.y - pet.y
+    if ddx * ddx + ddy * ddy > S.viewR * S.viewR then pet.x, pet.y = p.x - p.fx * 30, p.y - p.fy * 30 end -- left behind
+    local tx, ty
+    if melee then
+      local t = pet.tgt
+      pet.re = pet.re - dt
+      if not t or t.dead or pet.re <= 0 then
+        pet.re = 0.4
+        local q = S.q
+        local n = query(S, p.x, p.y, w.range * p.area, q)
+        local bd = math.huge
+        t = nil
+        for i = 1, n do
+          local e = q[i]
+          local dx, dy = e.x - pet.x, e.y - pet.y
+          local d2 = dx * dx + dy * dy + (e.def.stay and 1e6 or 0) -- braziers and goblins last
+          if d2 < bd then t, bd = e, d2 end
+        end
+        pet.tgt = t
+      end
+      if t then
+        local dx, dy = t.x - pet.x, t.y - pet.y
+        local d = sqrt(dx * dx + dy * dy) + 0.01
+        if d < t.r + 14 then
+          if pet.cd <= 0 then
+            pet.cd = w.cd * p.haste
+            damage(S, t, w.dmg, dx / d * w.knock, dy / d * w.knock)
+            S.hooks.fx(S, "bite", t.x, t.y, 0, w)
+          end
+          pet.face = dx < 0 and -1 or 1
+        else
+          tx, ty = t.x, t.y
+        end
+      else
+        tx, ty = p.x + (k % 2 == 0 and 1 or -1) * (36 + k * 6), p.y - 26
+      end
+    else
+      local a = S.t * 0.8 + k * TAU / w.count
+      tx, ty = p.x + cos(a) * 55, p.y + sin(a) * 40 + 12
+      if pet.cd <= 0 then
+        local T = S.targets
+        if nearest(S, pet.x, pet.y, 1, w.range) > 0 then
+          pet.cd = w.cd * p.haste
+          local e = T[1]
+          local a2 = atan2(e.y - pet.y, e.x - pet.x)
+          spawnProj(S, pet.x, pet.y, cos(a2) * w.speed, sin(a2) * w.speed, w)
+          lastProj(S).src = w.id
+          pet.face = e.x < pet.x and -1 or 1
+        else
+          pet.cd = 0.2
+        end
+      end
+    end
+    pet.moving = false
+    if tx then
+      local dx, dy = tx - pet.x, ty - pet.y
+      local d = sqrt(dx * dx + dy * dy)
+      if d > 3 then
+        local st = min(d, w.move * dt)
+        pet.x, pet.y = pet.x + dx / d * st, pet.y + dy / d * st
+        pet.moving = true
+        if abs(dx) > 2 then pet.face = dx < 0 and -1 or 1 end
+      end
+    end
+  end
+end
+
+---------------------------------------------------------------------------
+-- enemy AI (C.ENEMIES[kind].ai); no ai = plain chase in Sim.Step
+---------------------------------------------------------------------------
+local AI = {}
+local function chaseStep(e, dx, dy, d, dt, mul)
+  local sp = e.root > 0 and 0 or e.speed * (e.slow > 0 and 0.45 or 1) * dt * (mul or 1)
+  e.x = e.x + dx / d * sp + e.kx * dt
+  e.y = e.y + dy / d * sp + e.ky * dt
+  e.face = dx < 0 and -1 or 1
+end
+
+local function spawnEnemyBolt(S, e, ux, uy)
+  local def = e.def
+  local b = tremove(S.ebPool) or {}
+  b.kind, b.x, b.y = "enemybolt", e.x + ux * e.r, e.y + uy * e.r
+  b.vx, b.vy = ux * def.boltSpeed, uy * def.boltSpeed
+  b.dmg, b.life, b.dead, b.tex = def.boltDmg * e.dmg / def.dmg, 4, false, nil
+  S.nEB = S.nEB + 1
+  S.ebolts[S.nEB] = b
+end
+
+-- oozes chase; they split on death (see stepDeaths)
+function AI.split(S, e, dx, dy, d, dt)
+  chaseStep(e, dx, dy, d, dt)
+  if d < e.r + S.p.r then hurtPlayer(S, e) end
+end
+
+-- skeleton mages keep their distance and fire slow bolts the player can dodge
+function AI.ranged(S, e, dx, dy, d, dt)
+  local def = e.def
+  if e.aiS == 0 then e.aiS, e.aiT = 1, 0.5 + random() * def.fireCd end
+  local keep = def.keep
+  if d > keep + 30 then chaseStep(e, dx, dy, d, dt)
+  elseif d < keep - 50 then chaseStep(e, dx, dy, d, dt, -0.8)
+  else
+    e.x, e.y = e.x + e.kx * dt, e.y + e.ky * dt
+    e.face = dx < 0 and -1 or 1
+  end
+  e.aiT = e.aiT - dt
+  if e.aiT <= 0 and d < keep + 200 and e.root <= 0 then
+    e.aiT = def.fireCd * (0.85 + random() * 0.3)
+    spawnEnemyBolt(S, e, dx / d, dy / d)
+  end
+  if d < e.r + S.p.r then hurtPlayer(S, e) end
+end
+
+-- worgen stalk, stop and aim (telegraph line, orange tint), then dash in a straight line
+function AI.charge(S, e, dx, dy, d, dt)
+  local def = e.def
+  if e.aiS == 0 then e.aiS, e.aiT = 1, random() * def.dashCd end
+  if e.aiS == 1 then
+    chaseStep(e, dx, dy, d, dt)
+    e.aiT = e.aiT - dt
+    if e.aiT <= 0 and d < def.dashRange and e.root <= 0 then
+      e.aiS, e.aiT, e.ux, e.uy = 2, def.tele, dx / d, dy / d
+      local L = def.dashSpeed * def.dashTime
+      S.hooks.fx(S, "telegraph", e.x, e.y, e.x + e.ux * L, e.y + e.uy * L, def.tele)
+    end
+  elseif e.aiS == 2 then
+    e.x, e.y = e.x + e.kx * dt, e.y + e.ky * dt
+    e.aiT = e.aiT - dt
+    if e.aiT <= 0 then e.aiS, e.aiT = 3, def.dashTime end
+  else
+    if e.root <= 0 then
+      local sp = def.dashSpeed * (e.slow > 0 and 0.45 or 1) * dt
+      e.x, e.y = e.x + e.ux * sp, e.y + e.uy * sp
+    end
+    e.face = e.ux < 0 and -1 or 1
+    e.aiT = e.aiT - dt
+    if e.aiT <= 0 then e.aiS, e.aiT = 1, def.dashCd end
+  end
+  if d < e.r + S.p.r then hurtPlayer(S, e) end
+end
+
+-- the gold goblin runs away (zig-zagging) and vanishes after its life
+function AI.flee(S, e, dx, dy, d, dt)
+  if e.aiS == 0 then e.aiS, e.aiT = 1, e.def.life end
+  e.aiT = e.aiT - dt
+  if e.aiT <= 0 or d > S.viewR * 1.6 then
+    e.dead, e.gone = true, true
+    S.hooks.fx(S, "goblinGone", e.x, e.y)
+    return
+  end
+  local a = atan2(-dy, -dx) + sin(S.t * 1.7) * 0.7
+  if e.root <= 0 then
+    local sp = e.speed * (e.slow > 0 and 0.45 or 1) * dt
+    e.x, e.y = e.x + cos(a) * sp + e.kx * dt, e.y + sin(a) * sp + e.ky * dt
+  end
+  e.face = cos(a) < 0 and -1 or 1
+end
+
+-- braziers stand still and burn out when far behind
+function AI.static(S, e, dx, dy, d, dt)
+  if d > S.viewR * 1.5 then e.dead, e.gone = true, true end
+end
+
+---------------------------------------------------------------------------
+-- pickups (items other than the potion)
+---------------------------------------------------------------------------
+-- coins, chests and potions are handled in Sim.Step's item loop
+local PICKUP = {}
+function PICKUP.chicken(S)
+  local p = S.p
+  local h = min(p.maxhp - p.hp, p.maxhp * C.PICKUPS.chicken.heal)
+  p.hp = p.hp + h
+  S.hooks.heal(S, h)
+end
+function PICKUP.magnet(S)
+  for i = 1, S.nG do S.gems[i].pull = true end
+  for i = 1, S.nI do local it = S.items[i]; if it.kind == "coin" then it.pull = true end end
+  S.hooks.fx(S, "magnet", S.p.x, S.p.y)
+end
+function PICKUP.bomb(S)
+  local p, q = S.p, S.q
+  S.curSrc = "bomb"
+  local n = query(S, p.x, p.y, S.viewR, q)
+  local dmg = C.PICKUPS.bomb.dmg * Sim.HpScale(S.t)
+  for k = 1, n do damage(S, q[k], dmg) end
+  S.hooks.fx(S, "bomb", p.x, p.y, S.viewR)
+end
+
+local function pickWeighted(t)
+  local total = 0
+  for _, wt in pairs(t) do total = total + wt end
+  local r = random() * total
+  for k, wt in pairs(t) do
+    r = r - wt
+    if r <= 0 then return k end
+  end
+  return next(t)
+end
+
+---------------------------------------------------------------------------
+-- content step (called once per Sim.Step before compaction)
+---------------------------------------------------------------------------
+local function stepEvents(S)
+  local ev, E, p, t = S.ev, C.EVENTS, S.p, S.t
+  if E.rings[ev.ring] and t >= E.rings[ev.ring] then
+    ev.ring = ev.ring + 1
+    local count = floor(E.ringBase + t / 15)
+    local a0, R = random() * TAU, S.viewR + 10
+    for i = 1, count do
+      local a = a0 + i * TAU / count
+      if S.nE < S.cap + 80 then spawnEnemy(S, "skeleton", p.x + cos(a) * R, p.y + sin(a) * R, true) end
+    end
+    S.hooks.fx(S, "ring")
+  end
+  if E.goblins[ev.goblin] and t >= E.goblins[ev.goblin] then
+    ev.goblin = ev.goblin + 1
+    local x, y = ringPos(S, S.viewR * 0.45)
+    spawnEnemy(S, "goblin", x, y, true)
+    S.hooks.fx(S, "goblin", x, y)
+  end
+  if t >= ev.brazier then
+    ev.brazier = t + E.brazierEvery
+    local n = 0
+    for i = 1, S.nE do local e = S.enemies[i]; if e.kind == "brazier" and not e.dead then n = n + 1 end end
+    if n < E.brazierMax then
+      local x, y = ringPos(S, 180 + random() * 200)
+      spawnEnemy(S, "brazier", x, y, true)
+    end
+  end
+end
+
+local function stepEnemyBolts(S, dt)
+  local p = S.p
+  local hitR = p.r + 7
+  for i = 1, S.nEB do
+    local b = S.ebolts[i]
+    b.x, b.y = b.x + b.vx * dt, b.y + b.vy * dt
+    b.life = b.life - dt
+    if b.life <= 0 then
+      b.dead = true
+    else
+      local dx, dy = b.x - p.x, b.y - p.y
+      if dx * dx + dy * dy < hitR * hitR then
+        b.dead = true
+        hurtPlayer(S, b) -- iframes and armor apply
+      end
+    end
+  end
+  S.nEB = compact(S, S.ebolts, S.nEB, S.ebPool)
+end
+
+local function stepZones(S, dt)
+  local q = S.q2
+  for i = 1, S.nZ do
+    local z = S.zones[i]
+    if z.delay > 0 then
+      z.delay = z.delay - dt
+    else
+      z.t = z.t - dt
+      z.acc = z.acc - dt
+      if z.acc <= 0 then
+        local w = z.w
+        z.acc = w.tick
+        S.curSrc = z.src
+        local n = query(S, z.x, z.y, z.r, q)
+        for k = 1, n do
+          local e = q[k]
+          if w.slow and e.slow < w.slow then e.slow = w.slow end
+          damage(S, e, w.dmg)
+        end
+        if w.def.rain then S.hooks.fx(S, "rain", z.x, z.y, z.r, w) end
+      end
+      if z.t <= 0 then z.dead = true end
+    end
+  end
+  S.nZ = compact(S, S.zones, S.nZ, S.zonePool)
+end
+
+local function stepTraps(S, dt)
+  local q = S.q2
+  for i = 1, S.nTr do
+    local tr = S.traps[i]
+    tr.life = tr.life - dt
+    if tr.life <= 0 then
+      tr.dead = true
+    elseif tr.arm > 0 then
+      tr.arm = tr.arm - dt
+    elseif query(S, tr.x, tr.y, tr.w.trigger, q) > 0 then
+      local w = tr.w
+      local R = w.radius * S.p.area
+      S.curSrc = tr.src
+      local n = query(S, tr.x, tr.y, R, q)
+      for k = 1, n do
+        local e = q[k]
+        local dx, dy = e.x - tr.x, e.y - tr.y
+        local d = sqrt(dx * dx + dy * dy) + 0.01
+        damage(S, e, w.dmg, dx / d * 120, dy / d * 120)
+      end
+      S.hooks.fx(S, "impact", tr.x, tr.y, R, w)
+      tr.dead = true
+    end
+  end
+  S.nTr = compact(S, S.traps, S.nTr, S.trapPool)
+end
+
+-- killed this step (not silently removed): oozes split, braziers drop a pickup, curses spread
+local function stepDeaths(S)
+  local E, q = S.enemies, S.q
+  for i = 1, S.nE do
+    local e = E[i]
+    if e.dead and not e.gone then
+      local d = e.def
+      if d.split then
+        for _ = 1, d.splitN do
+          local a = random() * TAU
+          local o = spawnEnemy(S, d.split, e.x + cos(a) * 8, e.y + sin(a) * 8, true)
+          if o then o.kx, o.ky = cos(a) * 140, sin(a) * 140 end
+        end
+      end
+      if e.kind == "goblin" then S.hooks.fx(S, "goblinKilled", e.x, e.y) end -- its coins drop in damage()
+      if d.ai == "static" then dropItem(S, pickWeighted(C.EVENTS.pickups), e.x, e.y) end
+      local w = e.corr
+      if w then
+        e.corr = nil
+        S.curSrc = w.id
+        local n = query(S, e.x, e.y, w.range, q)
+        local c = 0
+        for k = 1, n do
+          local o = q[k]
+          if c >= w.spread then break end
+          if not o.corr then
+            c = c + 1
+            o.corr = w
+            S.hooks.fx(S, "spread", e.x, e.y, o.x, o.y, w)
+            damage(S, o, w.dmg, nil, nil, w.dot, w.dotDur)
+          end
+        end
+      end
+    end
+  end
+end
+
+function Sim.StepContent(S, dt)
+  stepEvents(S)
+  if S.nEB > 0 then stepEnemyBolts(S, dt) end
+  if S.nZ > 0 then stepZones(S, dt) end
+  if S.nTr > 0 then stepTraps(S, dt) end
+  stepDeaths(S)
+end
+
+---------------------------------------------------------------------------
 -- step
 ---------------------------------------------------------------------------
 function Sim.Step(S, dt, ix, iy)
@@ -830,7 +1388,7 @@ function Sim.Step(S, dt, ix, iy)
   while S.spawnAcc >= 1 and S.nE < (S.stress and S.cap or target) do
     S.spawnAcc = S.spawnAcc - 1
     local x, y = ringPos(S, S.viewR + 30)
-    spawnEnemy(S, pickKind(S.t), x, y)
+    spawnEnemy(S, pickKind(S.t, S.zdef and S.zdef.mix), x, y)
   end
   if S.t >= S.nextElite then
     S.nextElite = S.nextElite + C.ELITE_EVERY
@@ -877,14 +1435,17 @@ function Sim.Step(S, dt, ix, iy)
     if not e.dead then
       local dx, dy = p.x - e.x, p.y - e.y
       local d = sqrt(dx * dx + dy * dy)
-      if d > far and not e.def.boss and not e.def.elite then
+      if d > far and not e.def.boss and not e.def.elite and not e.def.stay then
         e.x, e.y = ringPos(S, S.viewR + 30) -- left behind: come back from ahead
       elseif d > 0.001 then
+        local ai = e.def.ai
+        if ai then AI[ai](S, e, dx, dy, d, dt) else -- ranged, charge, split, flee, static
         local sp = e.root > 0 and 0 or e.speed * (e.slow > 0 and 0.45 or 1) * dt
         e.x = e.x + dx / d * sp + e.kx * dt
         e.y = e.y + dy / d * sp + e.ky * dt
         e.face = dx < 0 and -1 or 1
         if d < e.r + p.r then hurtPlayer(S, e) end
+        end
       end
       if e.kx ~= 0 then
         local f = max(0, 1 - 10 * dt)
@@ -934,6 +1495,7 @@ function Sim.Step(S, dt, ix, iy)
   local P, q = S.projs, S.q2
   for i = 1, S.nP do
     local pr = P[i]
+    if pr.w.def.homing then steer(S, pr, dt) end
     pr.x, pr.y = pr.x + pr.vx * dt, pr.y + pr.vy * dt
     pr.life = pr.life - dt
     if pr.life <= 0 then
@@ -946,6 +1508,8 @@ function Sim.Step(S, dt, ix, iy)
           e.lastProj = pr.id
           S.curSrc = pr.src
           damage(S, e, pr.dmg, pr.vx * 0.25, pr.vy * 0.25)
+          local hit = pr.w.def.hit
+          if hit then HIT[hit](S, pr, e) end
           pr.pierce = pr.pierce - 1
           if pr.pierce <= 0 then pr.dead = true; break end
         end
@@ -989,7 +1553,11 @@ function Sim.Step(S, dt, ix, iy)
       it.dead = true
       if it.kind == "potion" then p.hp = min(p.maxhp, p.hp + p.maxhp * 0.3)
       elseif it.kind == "coin" then S.gold = S.gold + (it.value or 1) * S.goldMul
-      elseif it.kind == "chest" then S.chestN = S.chestN + (it.value or 1) end
+      elseif it.kind == "chest" then S.chestN = S.chestN + (it.value or 1)
+      else
+        local pk = PICKUP[it.kind] -- magnet, chicken, bomb
+        if pk then pk(S, it) end
+      end
       S.hooks.pickup(S, it.kind, it)
     elseif it.kind == "coin" and d2 > lost2 then -- left far behind: banked into the next coin, never lost
       it.dead = true
@@ -1002,10 +1570,12 @@ function Sim.Step(S, dt, ix, iy)
     end
   end
 
+  Sim.StepContent(S, dt) -- events, enemy projectiles, zones, traps, deaths (splits, drops, spreading curses)
   S.nE = compact(S, E, S.nE, S.enemyPool)
   S.nP = compact(S, P, S.nP, S.projPool)
   S.nG = compact(S, G, S.nG, S.gemPool)
   S.nI = compact(S, S.items, S.nI, nil)
+  if S.state ~= "play" then return end -- killed by an enemy projectile
 
   if S.t >= C.RUN_SECONDS and not S.stress then
     S.state = "won"
@@ -1058,6 +1628,7 @@ function Sim.Serialize(S)
     d.choices = {}
     for i, c in ipairs(S.choices) do d.choices[i] = { c.kind, c.id, c.level } end
   end
+  d.zone, d.ev = S.zone, { S.ev.ring, S.ev.goblin, S.ev.brazier }
   return d
 end
 
@@ -1070,6 +1641,7 @@ function Sim.Deserialize(d, opts)
   opts.class = d.class
   -- the run keeps the shop ranks, curses and unlocks it started with
   opts.meta, opts.curses, opts.unlocks = d.meta, d.curses, d.unlocks
+  opts.zone = d.zone
   local S = Sim.New(opts)
   -- weapons in their order, levelled up the same way as in play
   S.weapons, S.wlist, S.poison, S.thorns, S.gotAt = {}, {}, nil, nil, {}
@@ -1117,6 +1689,7 @@ function Sim.Deserialize(d, opts)
     S.nI = S.nI + 1
     S.items[S.nI] = it
   end
+  Sim.RestoreEvents(S, d.ev)
   if d.state == "chest" and S.chestN > 0 then
     S.state = "chest"
   elseif d.state == "levelup" and d.choices then

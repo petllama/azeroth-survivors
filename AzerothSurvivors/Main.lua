@@ -38,7 +38,19 @@ local SFX = {
   ach      = { "UI_EPICLOOT_TOAST", 31578 },
   buy      = { "UI_GARRISON_ARCHITECT_TABLE_UPGRADE", 44302 },
   click    = { "IG_MAINMENU_OPTION_CHECKBOX_ON", 856 },
+  -- map events and pickups
+  goblin   = { "UI_BONUS_LOOT_ROLL_START", 31579 },
+  goblinKilled = { "TRADING_POST_UI_COLLECTING_COINS", 218228 },
+  ring     = { "UI_GARRISON_TOAST_INVASION_ALERT", 44292 },
+  bomb     = { "UI_73_ARTIFACT_OVERLOADED_ORB_IMPACT_MEDIUM", 97597, max = 1, window = 0.5 },
+  chicken  = { "UI_ADVENTURES_HEAL_FOLLOWER", 169288, max = 1, window = 0.5 },
+  magnet   = { "UI_POWER_AURA_GENERIC", 23287, max = 1, window = 0.5 },
+  brazier  = { "PUT_DOWN_SMALL_CHAIN", 1212, max = 1, window = 0.3 },
+  ebolt    = { "UI_73_ARTIFACT_OVERLOADED_ORB_IMPACT_LOW", 97598, max = 1, window = 0.35 },
 }
+-- Sim fx / pickup kinds that make a sound (same name in SFX)
+local FX_SOUND = { goblin = true, goblinKilled = true, ring = true }
+local PICKUP_SOUND = { coin = true, bomb = true, chicken = true, magnet = true }
 ns.SFX = SFX
 local sfxT, sfxN = {}, {}
 -- at most `max` (default 2) plays per `window` (default 0.1 s) per name
@@ -62,11 +74,20 @@ end
 local hooks = {
   release = R.Release,
   number = R.Number,
-  fx = R.Fx,
-  hurt = function() R.Hurt(); ns.Sfx("hit") end,
+  fx = function(s, kind, ...)
+    R.Fx(s, kind, ...)
+    if FX_SOUND[kind] then ns.Sfx(kind) end
+  end,
+  hurt = function(s)
+    R.Hurt()
+    ns.Sfx(s and s.lastHit and s.lastHit.kind == "enemybolt" and "ebolt" or "hit")
+  end,
   heal = R.Heal,
-  kill = R.Kill,
-  pickup = function(_, kind) if kind == "coin" then ns.Sfx("coin") end end,
+  kill = function(s, e)
+    R.Kill(s, e)
+    if e.kind == "brazier" then ns.Sfx("brazier") end
+  end,
+  pickup = function(_, kind) if PICKUP_SOUND[kind] then ns.Sfx(kind) end end,
   levelup = function(s)
     mode = "levelup"
     UI.LevelUp(s)
@@ -155,19 +176,40 @@ function ns.ToggleCurse(id)
   return ns.db.curses[id] and true or false
 end
 
+-- Zone theme (C.ZONES key) for the player's map: exact uiMapID, else name keywords on the map and its parents
+-- (zone -> continent). nil = the default ground and waves.
+function ns.DetectZone()
+  if not (C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo) then return nil end
+  local ok, id = pcall(C_Map.GetBestMapForUnit, "player")
+  if not ok then return nil end
+  for _ = 1, 8 do
+    if not id or id == 0 then return nil end
+    if C.ZONE_MAPS[id] then return C.ZONE_MAPS[id] end
+    local ok2, info = pcall(C_Map.GetMapInfo, id)
+    if not ok2 or type(info) ~= "table" then return nil end
+    local key = C.ZoneForName(info.name)
+    if key then return key end
+    id = info.parentMapID
+  end
+  return nil
+end
+
 local function startRun()
   if S then R.ReleaseAll(S) end
   local cls = C.CLASSES[ns.db.class] and ns.db.class or "paladin"
   local stress = stressCap and true or nil
-  S = Sim.New({ class = cls, viewR = viewR(), hooks = hooks, stress = stress, cap = stressCap,
+  local zone = ns.DetectZone()
+  S = Sim.New({ class = cls, zone = zone, viewR = viewR(), hooks = hooks, stress = stress, cap = stressCap,
     meta = not stress and ns.db.meta or nil, curses = not stress and ns.db.curses or nil,
     unlocks = not stress and C.UnlockBonus(ns.db.ach) or nil })
   S.achT = 0
   R.SetClass(C.CLASSES[cls])
+  R.SetZone(S.zone)
   UI.HideBoss()
   UI.Show(nil)
   mode = "play"
-  if stressCap then UI.Banner("Stress test: " .. stressCap .. " enemies, invulnerable", 0.6, 1, 0.6) end
+  if stressCap then UI.Banner("Stress test: " .. stressCap .. " enemies, invulnerable", 0.6, 1, 0.6)
+  elseif S.zdef then UI.Banner(S.zdef.name, 0.85, 0.8, 0.6) end
 end
 
 local function pause(reason)
@@ -204,6 +246,7 @@ local function loadRun()
   S = S2
   stressCap = nil
   R.SetClass(C.CLASSES[S.class])
+  R.SetZone(S.zone)
   UI.HideBoss()
   S.achT = 0
   if S.state == "levelup" then

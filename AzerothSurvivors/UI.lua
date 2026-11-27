@@ -12,6 +12,12 @@ local choiceButtons = {}
 local subs, subOpen = {}, nil
 local toast
 local WEAPON_SLOTS_MAX = C.WEAPON_SLOTS + 1 -- the 6th slot is an achievement unlock
+-- results screen rows for damage that no skill did (S.dmgBy keys that are not weapon ids)
+local SOURCES = {
+  bomb  = { name = "Goblin Bomb", icon = "Interface\\Icons\\INV_Misc_Bomb_05", color = { 1, 0.55, 0.2 } },
+  other = { name = "Other", icon = "Interface\\Icons\\INV_Misc_QuestionMark", color = { 0.7, 0.7, 0.7 } },
+}
+UI.SOURCES = SOURCES
 UI.panels, UI.subs = panels, subs
 
 local function font(parent, size, flags, layer)
@@ -106,19 +112,22 @@ function UI.Init(frame)
   -- title
   local t = panel("title", frame)
   local title = font(t, 40)
-  title:SetPoint("TOP", 0, -40)
+  title:SetPoint("TOP", 0, -26)
   title:SetText("Azeroth Survivors")
   title:SetTextColor(1, 0.82, 0)
   local sub = font(t, 14)
-  sub:SetPoint("TOP", title, "BOTTOM", 0, -18)
-  sub:SetWidth(560)
+  sub:SetPoint("TOP", title, "BOTTOM", 0, -12)
+  sub:SetWidth(900)
   sub:SetText("Survive the Scourge for 10 minutes. Move with |cffffd100WASD|r or the |cffffd100arrow keys|r; your skills cast themselves.\nCollect crystals to level up and choose upgrades. |cffffd100ESC|r pauses. Combat with real mobs pauses the game.")
   t.cards = {}
+  -- two rows of three cards
+  local CW, CH = 300, 150
   for i, id in ipairs(C.CLASS_ORDER) do
     local cd = C.CLASSES[id]
     local b = CreateFrame("Button", nil, t)
-    b:SetSize(230, 250)
-    b:SetPoint("TOP", sub, "BOTTOM", (i - 2) * 250, -26)
+    b:SetSize(CW, CH)
+    local col, row = (i - 1) % 3, floor((i - 1) / 3)
+    b:SetPoint("TOP", sub, "BOTTOM", (col - 1) * (CW + 14), -16 - row * (CH + 10))
     local bg = b:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
     bg:SetColorTexture(0.1, 0.09, 0.13, 0.95)
@@ -129,46 +138,51 @@ function UI.Init(frame)
     b:SetHighlightTexture(WHITE)
     b:GetHighlightTexture():SetVertexColor(1, 1, 1, 0.06)
     local icon = b:CreateTexture(nil, "ARTWORK")
-    icon:SetSize(56, 56)
-    icon:SetPoint("TOP", 0, -14)
+    icon:SetSize(48, 48)
+    icon:SetPoint("TOPLEFT", 10, -10)
     icon:SetTexture(cd.icon)
-    local name = font(b, 18)
-    name:SetPoint("TOP", icon, "BOTTOM", 0, -6)
+    local name = font(b, 17)
+    name:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, -1)
     name:SetText(cd.name)
     name:SetTextColor(cd.color[1], cd.color[2], cd.color[3])
-    local desc = font(b, 11, "")
-    desc:SetPoint("TOP", name, "BOTTOM", 0, -6)
-    desc:SetWidth(206)
-    desc:SetText(cd.desc .. string.format("\n|cffaaaaaa%d health, speed %d%s|r", cd.hp, cd.speed,
-      cd.crit > 0.1 and ", high crit" or (cd.armor > 0 and ", armored" or (cd.regen > 0 and ", regenerates" or ""))))
+    local desc = font(b, 10, "")
+    desc:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -4)
+    desc:SetWidth(CW - 78)
+    desc:SetJustifyH("LEFT")
+    local trait = cd.trait or (cd.crit > 0.1 and "high crit" or (cd.armor > 0 and "armored" or (cd.regen > 0 and "regenerates" or nil)))
+    desc:SetText(cd.desc .. string.format("\n|cffaaaaaa%d health, speed %d%s|r", cd.hp, cd.speed, trait and (", " .. trait) or ""))
     for k, wid in ipairs(cd.kit) do
       local sk = b:CreateTexture(nil, "ARTWORK")
-      sk:SetSize(30, 30)
-      sk:SetPoint("BOTTOMLEFT", 14 + (k - 1) * 41, 34)
+      sk:SetSize(26, 26)
+      sk:SetPoint("BOTTOMLEFT", 10 + (k - 1) * 31, 24)
       sk:SetTexture(C.WEAPONS[wid].icon)
       sk:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     end
     local startName = font(b, 10, "")
-    startName:SetPoint("BOTTOM", 0, 14)
+    startName:SetPoint("BOTTOMLEFT", 10, 7)
     startName:SetText("Starts with |cffffd100" .. C.WEAPONS[cd.start].name .. "|r")
     b.best = font(b, 10, "")
-    b.best:SetPoint("BOTTOM", 0, 2)
+    b.best:SetPoint("BOTTOMRIGHT", -8, 28)
+    b.best:SetJustifyH("RIGHT")
+    b.best:SetWidth(CW - 172)
     b.best:SetTextColor(0.7, 0.7, 0.7)
     local key = font(b, 14)
-    key:SetPoint("TOPLEFT", 8, -6)
+    key:SetPoint("TOPLEFT", 4, -3)
     key:SetText(i)
     b:SetScript("OnClick", function() ns.StartClass(id) end)
     t.cards[id] = b
   end
+  local rows = floor((#C.CLASS_ORDER + 2) / 3)
+  local below = -16 - rows * (CH + 10)
   t.cont = CreateFrame("Button", nil, t, "UIPanelButtonTemplate")
   t.cont:SetSize(360, 26)
-  t.cont:SetPoint("TOP", sub, "BOTTOM", 0, -330)
+  t.cont:SetPoint("TOP", sub, "BOTTOM", 0, below - 34)
   t.cont:SetScript("OnClick", function() ns.QuickLoad() end)
   local go = font(t, 16)
-  go:SetPoint("TOP", sub, "BOTTOM", 0, -300)
-  go:SetText("Press |cffffd1001|r |cffffd1002|r |cffffd1003|r or click a class.  |cff00ff00SPACE|r plays the highlighted one.")
+  go:SetPoint("TOP", sub, "BOTTOM", 0, below - 6)
+  go:SetText("Press |cffffd1001|r-|cffffd100" .. #C.CLASS_ORDER .. "|r or click a class.  |cff00ff00SPACE|r plays the highlighted one.")
   t.champion = font(t, 13)
-  t.champion:SetPoint("TOP", 0, -14)
+  t.champion:SetPoint("TOP", 0, -8)
   t.champion:SetTextColor(1, 0.5, 0.15)
   t.info = font(t, 13)
   t.info:SetPoint("BOTTOM", 0, 52)
@@ -396,7 +410,7 @@ function UI.TitleBest(db, selected)
   end
   for id, card in pairs(panels.title.cards) do
     local b = db.bestByClass and db.bestByClass[id]
-    card.best:SetText(b and string.format("Best: %s, level %d%s", fmtTime(b.t), b.level, b.won and " |cff00ff00victory|r" or "") or "")
+    card.best:SetText(b and string.format("Best %s, lv %d%s", fmtTime(b.t), b.level, b.won and "\n|cff00ff00victory|r" or "") or "")
     if id == selected then card.edge:SetColorTexture(1, 0.82, 0, 1) else card.edge:SetColorTexture(0.4, 0.35, 0.25, 0.9) end
   end
 end
@@ -449,9 +463,10 @@ function UI.Over(S, won, res)
     local e = list[i]
     if e then
       local d = C.WEAPONS[e.id]
-      r.icon:SetTexture(d and d.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
-      r.name:SetText(d and ((d.evolved and "|cffffd100" or "") .. d.name .. (d.evolved and "|r" or "")) or "Other")
-      local col = d and d.color or { 0.7, 0.7, 0.7 }
+      local src = SOURCES[e.id] or SOURCES.other
+      r.icon:SetTexture(d and d.icon or src.icon)
+      r.name:SetText(d and ((d.evolved and "|cffffd100" or "") .. d.name .. (d.evolved and "|r" or "")) or src.name)
+      local col = d and d.color or src.color
       r.bar:SetStatusBarColor(col[1], col[2], col[3])
       r.bar:SetMinMaxValues(0, top)
       r.bar:SetValue(e.amt)

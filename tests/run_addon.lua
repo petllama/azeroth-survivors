@@ -7,6 +7,7 @@ local calls = {}
 local Widget = {}
 local function widget(kind, parent)
   local w = { _kind = kind, _parent = parent, _shown = kind ~= "Frame" or true, _scripts = {}, _w = 0, _h = 0, _children = {} }
+  if parent then parent._children[#parent._children + 1] = w end
   return setmetatable(w, Widget)
 end
 Widget.__index = function(self, k)
@@ -37,14 +38,22 @@ function Widget:SetChecked(v) self._checked = v end
 function Widget:GetChecked() return self._checked end
 function Widget:GetStringHeight() return 14 end
 function Widget:Click() local f = self._scripts.OnClick; if f then f(self) end end
-function Widget:SetPoint(...) calls.SetPoint = (calls.SetPoint or 0) + 1; assert(select("#", ...) >= 1) end
+function Widget:SetPoint(point, a, b, c, d)
+  calls.SetPoint = (calls.SetPoint or 0) + 1
+  assert(type(point) == "string", "SetPoint point")
+  local rel, relPoint, x, y = self._parent, point, 0, 0 -- the last point, for the layout check
+  if type(a) == "number" then x, y = a, b
+  elseif type(a) == "table" then rel = a; if type(b) == "string" then relPoint, x, y = b, c, d else x, y = b, c end
+  elseif type(a) == "string" then x, y = c, d; relPoint = b or point end
+  self._pt = { point, rel, relPoint, x or 0, y or 0 }
+end
 function Widget:CreateTexture() return widget("Texture", self) end
 function Widget:CreateFontString() return widget("FontString", self) end
 function Widget:CreateLine() return widget("Line", self) end
 function Widget:GetHighlightTexture() return widget("Texture", self) end
 function Widget:SetText(t) assert(t ~= nil, "SetText(nil)"); self._text = t end
 function Widget:GetText() return self._text end
-function Widget:SetFont(path, size) assert(path and size, "SetFont args") end
+function Widget:SetFont(path, size) assert(path and size, "SetFont args"); self._fsize = size end
 function Widget:SetTexture(path) self._tex = path; return not _G.__noArt end
 function Widget:SetPropagateKeyboardInput(v) assert(not _G.__inCombat, "SetPropagateKeyboardInput in combat"); self._prop = v end
 
@@ -71,7 +80,21 @@ function TaxiNodeName(i) return TAXI[i][1] end
 function TaxiNodeGetType(i) return TAXI[i][2] end
 function TaxiNodePosition(i) return TAXI[i][3], TAXI[i][4] end
 function GetTaxiMapID() return 1415 end
-C_Map = { GetMapWorldSize = function() return 30000, 20000 end }
+-- maps: a subzone with no keyword under Tirisfal Glades (parent walk), an unknown cave, an isle on a continent
+local MAPS = {
+  [9001] = { mapID = 9001, name = "Scarlet Watch Post", mapType = 5, parentMapID = 9002 },
+  [9002] = { mapID = 9002, name = "Tirisfal Glades", mapType = 3, parentMapID = 1415 },
+  [1415] = { mapID = 1415, name = "Eastern Kingdoms", mapType = 2, parentMapID = 947 },
+  [947]  = { mapID = 947, name = "Azeroth", mapType = 1, parentMapID = 0 },
+  [9100] = { mapID = 9100, name = "Nowhere Cave", mapType = 4, parentMapID = 0 },
+  [9200] = { mapID = 9200, name = "Some Isle", mapType = 3, parentMapID = 1415 },
+}
+_G.__mapID = 9001
+C_Map = {
+  GetMapWorldSize = function() return 30000, 20000 end,
+  GetBestMapForUnit = function(unit) assert(unit == "player"); return _G.__mapID end,
+  GetMapInfo = function(id) return MAPS[id] end,
+}
 function TakeTaxiNode(i) if hooks_.TakeTaxiNode then hooks_.TakeTaxiNode(i) end end
 RaidWarningFrame = {}
 ChatTypeInfo = { RAID_WARNING = {}, SYSTEM = {} }
@@ -87,7 +110,10 @@ function debugprofilestop() return os.clock() * 1000 end
 SOUNDKIT = { UI_GARRISON_COMMAND_TABLE_FOLLOWER_LEVEL_UP = 46893, UI_GARRISON_COMMAND_TABLE_CHEST_UNLOCK_GOLD_SUCCESS = 44332,
   UI_70_ARTIFACT_FORGE_TRAIT_GOLD_TRAIT = 54125, LOOT_WINDOW_COIN_SOUND = 120, IG_CREATURE_AGGRO_SELECT = 873, RAID_WARNING = 8959,
   UI_GARRISON_MISSION_COMPLETE_MISSION_FAIL_STINGER = 43503, LFG_REWARDS = 17316, UI_EPICLOOT_TOAST = 31578,
-  UI_GARRISON_ARCHITECT_TABLE_UPGRADE = 44302, IG_MAINMENU_OPTION_CHECKBOX_ON = 856 }
+  UI_GARRISON_ARCHITECT_TABLE_UPGRADE = 44302, IG_MAINMENU_OPTION_CHECKBOX_ON = 856,
+  UI_BONUS_LOOT_ROLL_START = 31579, TRADING_POST_UI_COLLECTING_COINS = 218228, UI_GARRISON_TOAST_INVASION_ALERT = 44292,
+  UI_73_ARTIFACT_OVERLOADED_ORB_IMPACT_MEDIUM = 97597, UI_ADVENTURES_HEAL_FOLLOWER = 169288, UI_POWER_AURA_GENERIC = 23287,
+  PUT_DOWN_SMALL_CHAIN = 1212, UI_73_ARTIFACT_OVERLOADED_ORB_IMPACT_LOW = 97598 }
 local played = {}
 function PlaySound(id) assert(type(id) == "number", "PlaySound needs a SoundKit id"); played[id] = (played[id] or 0) + 1; return true end
 -- guild / addon messages
@@ -166,6 +192,67 @@ local frame = _G.AzerothSurvivorsFrame
 assert(frame, "no main frame")
 frame._w, frame._h = 1200, 760
 
+-- Title screen layout (1000x700): resolve each direct child's rectangle from its last SetPoint (vertical and
+-- horizontal) with estimated text sizes, and check nothing overlaps or leaves the window.
+do
+  local UI = ns.UI
+  local t = UI.panels.title
+  local W, H = 1000, 700
+  local function textSize(r)
+    local s = (r._text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    local size, lines, longest = r._fsize or 12, 0, 0
+    for line in (s .. "\n"):gmatch("(.-)\n") do
+      local w = #line * size * 0.52
+      local n = (r._w > 0 and w > r._w) and math.ceil(w / r._w) or 1
+      lines = lines + n
+      longest = math.max(longest, r._w > 0 and math.min(w, r._w) or w)
+    end
+    return (r._w > 0 and r._w or longest), lines * size * 1.2
+  end
+  local FX = { LEFT = 0, CENTER = 0.5, RIGHT = 1 }
+  local function frac(p)
+    local fx = p:match("LEFT") and 0 or (p:match("RIGHT") and 1 or 0.5)
+    local fy = p:match("TOP") and 1 or (p:match("BOTTOM") and 0 or 0.5)
+    return fx, fy
+  end
+  local rect
+  rect = function(r)
+    if r == t or r == nil then return 0, 0, W, H end
+    local w, h = r._w, r._h
+    if r._kind == "FontString" then w, h = textSize(r) end
+    local pt = r._pt
+    assert(pt, "layout: region without a point")
+    local rx, ry, rw, rh = rect(pt[2] ~= t._parent and pt[2] or t)
+    local ax, ay = frac(pt[3])
+    local px, py = frac(pt[1])
+    local x = rx + rw * ax + pt[4] - w * px
+    local y = ry + rh * ay + pt[5] - h * py
+    return x, y, w, h
+  end
+  local skip = {}
+  for _, s in pairs(UI.subs) do skip[s] = true end
+  local boxes = {}
+  for _, r in ipairs(t._children) do
+    if r._pt and not skip[r] and r._pt[2] ~= nil and (r._kind ~= "FontString" or (r._text or r == t.champion or r == t.info)) then
+      if r == t.champion and not r._text then r._text = "Champion of Azeroth" end
+      if r == t.info and not r._text then r._text = "|cffffd10099999 gold|r banked     Curses: Horde, Brutal, Haste, Frail" end
+      local x, y, w, h = rect(r)
+      boxes[#boxes + 1] = { r = r, x = x, y = y, w = w, h = h, name = r._text or r._kind }
+      assert(x >= 0 and y >= 0 and x + w <= W + 0.5 and y + h <= H + 0.5,
+        string.format("title layout: %s leaves the window (%.0f,%.0f %.0fx%.0f)", tostring(r._text or r._kind):sub(1, 30), x, y, w, h))
+    end
+  end
+  for i = 1, #boxes do
+    for j = i + 1, #boxes do
+      local a, b = boxes[i], boxes[j]
+      local ov = a.x < b.x + b.w - 1 and b.x < a.x + a.w - 1 and a.y < b.y + b.h - 1 and b.y < a.y + a.h - 1
+      assert(not ov, string.format("title layout overlap: %s (%.0f,%.0f %.0fx%.0f) and %s (%.0f,%.0f %.0fx%.0f)",
+        tostring(a.name):sub(1, 30), a.x, a.y, a.w, a.h, tostring(b.name):sub(1, 30), b.x, b.y, b.w, b.h))
+    end
+  end
+  print(string.format("title layout ok: %d regions inside 1000x700, no overlaps", #boxes))
+end
+
 local function key(k, isDown)
   down[k] = isDown or nil
   local h = frame._scripts[isDown and "OnKeyDown" or "OnKeyUp"]
@@ -227,7 +314,7 @@ _G.__inCombat = false; fireAll("PLAYER_REGEN_ENABLED")
 key("Q", true); tick(dt)
 key("SPACE", true); for _ = 1, 120 do tick(dt) end
 -- every class: game over -> C -> class key, then play a while with level-ups
-for i, cls in ipairs({ "paladin", "rogue", "druid" }) do
+for i, cls in ipairs(ns.Content.CLASS_ORDER) do
   local S0, m0 = ns.State()
   if m0 == "levelup" then key("1", true) end
   if m0 == "chest" then key("SPACE", true); key("SPACE", true); key("SPACE", true) end
@@ -254,6 +341,194 @@ for i, cls in ipairs({ "paladin", "rogue", "druid" }) do
   for _, w in ipairs(S2.wlist) do ws[#ws + 1] = w.id .. w.level end
   print(string.format("%s: t=%.0f level=%d kills=%d state=%s  %s", cls, S2.t, S2.p.level, S2.kills, S2.state, table.concat(ws, " ")))
 end
+-- zone themes from the mocked map
+do
+  local S = ns.State()
+  assert(S.zone == "tirisfal" and ns.Render.zone == "tirisfal", "zone theme from the map's parent: " .. tostring(S.zone))
+  _G.__mapID = 9100; assert(ns.DetectZone() == nil, "unknown zone should have no theme")
+  _G.__mapID = 9200; assert(ns.DetectZone() == "elwynn", "continent fallback")
+  _G.__mapID = 1452; assert(ns.DetectZone() == "snow", "exact uiMapID (Winterspring)")
+  _G.__mapID = nil; assert(ns.DetectZone() == nil, "no map")
+  _G.__mapID = 9001
+  print("zones ok: parent walk -> tirisfal, unknown -> none, continent -> elwynn, map id -> snow")
+end
+
+-- content: pets, enemy AI, enemy projectiles, splits, map events and pickups, straight on the sim
+do
+  local Sim, C = ns.Sim, ns.Content
+  local function fresh(cls, weapon)
+    local S = Sim.New({ class = cls, viewR = 600, weapon = weapon, cap = 0 })
+    return S
+  end
+  local function hold(e) e.root = 1e9 end
+  -- pets: the imp shoots, the wolf bites
+  for _, pw in ipairs({ { "warlock", "imp" }, { "hunter", "wolf" } }) do
+    local S = fresh(pw[1], pw[2])
+    local e = Sim.SpawnEnemy(S, "brute", 150, 0, true); hold(e)
+    local hp0 = e.hp
+    for _ = 1, 240 do Sim.Step(S, 1 / 60, 0, 0) end
+    local w = S.weapons[pw[2]]
+    assert(w.pets and #w.pets == 1, pw[2] .. ": no pet")
+    assert(e.hp < hp0 or e.dead, pw[2] .. ": the pet dealt no damage")
+    print(string.format("%s ok: pet at %.0f,%.0f, brute %d -> %d hp", pw[2], w.pets[1].x, w.pets[1].y, hp0, math.max(0, e.hp)))
+  end
+  -- caster: keeps its distance, its bolt hits the player through the normal hit path (armor, iframes)
+  do
+    local S = fresh("mage"); S.wlist = {}; S.weapons = {}
+    local e = Sim.SpawnEnemy(S, "caster", 400, 0, true)
+    local hp0, t = S.p.hp, 0
+    while S.p.hp >= hp0 and t < 10 do Sim.Step(S, 1 / 60, 0, 0); t = t + 1 / 60 end
+    assert(S.p.hp < hp0 and S.lastHit and S.lastHit.kind == "enemybolt", "enemy bolt did not hit the player")
+    assert(S.p.iframes > 0, "a bolt hit gives iframes")
+    local dx = e.x - S.p.x
+    assert(dx > 120 and dx < 300, "caster should keep about 220 px away, at " .. dx)
+    print(string.format("caster ok: bolt hit for %.1f at %.1fs, caster keeps %.0f px", hp0 - S.p.hp, t, dx))
+  end
+  -- charger: telegraphs (stands, line), then dashes
+  do
+    local S = fresh("mage"); S.wlist = {}; S.weapons = {}; S.invuln = true
+    local tele = 0
+    S.hooks.fx = function(_, kind) if kind == "telegraph" then tele = tele + 1 end end
+    local e = Sim.SpawnEnemy(S, "charger", 250, 0, true)
+    local seen, maxSp, lx = {}, 0, e.x
+    for _ = 1, 60 * 6 do
+      Sim.Step(S, 1 / 60, 0, 0)
+      seen[e.aiS] = true
+      maxSp = math.max(maxSp, math.abs(e.x - lx) * 60)
+      if e.x < -50 then e.x = 250 end
+      lx = e.x
+    end
+    assert(tele > 0 and seen[2] and seen[3], "charger never telegraphed and dashed")
+    assert(maxSp > 250, "dash too slow: " .. maxSp)
+    print(string.format("charger ok: %d telegraphs, dash speed %.0f", tele, maxSp))
+  end
+  -- ooze splits into two oozelets
+  do
+    local S = fresh("mage"); S.wlist = {}; S.weapons = {}
+    local e = Sim.SpawnEnemy(S, "ooze", 300, 0, true)
+    Sim.Damage(S, e, 1e6)
+    Sim.Step(S, 1 / 60, 0, 0)
+    local n = 0
+    for i = 1, S.nE do if S.enemies[i].kind == "oozelet" then n = n + 1 end end
+    assert(n == 2, "ooze should split into 2 oozelets, got " .. n)
+    print("ooze ok: split into " .. n)
+  end
+  -- brazier drops a pickup; magnet, chicken, bomb, coin work
+  do
+    local S = fresh("mage"); S.wlist = {}; S.weapons = {}
+    local b = Sim.SpawnEnemy(S, "brazier", 200, 0, true)
+    Sim.Damage(S, b, 1e6)
+    Sim.Step(S, 1 / 60, 0, 0)
+    local kind
+    for i = 1, S.nI do local it = S.items[i]; if C.PICKUPS[it.kind] and it.kind ~= "coin" then kind = it.kind end end
+    assert(kind, "brazier dropped no pickup")
+    S.items, S.nI = {}, 0
+    -- chicken
+    S.p.hp = 10
+    Sim.DropItem(S, "chicken", S.p.x, S.p.y)
+    Sim.Step(S, 1 / 60, 0, 0)
+    assert(math.abs(S.p.hp - (10 + S.p.maxhp * 0.3)) < 1, "chicken should heal 30%: " .. S.p.hp)
+    -- magnet: a far crystal flies in
+    local g = { x = S.p.x + 400, y = S.p.y, xp = 3, pull = false, dead = false }
+    S.nG = S.nG + 1; S.gems[S.nG] = g
+    Sim.DropItem(S, "magnet", S.p.x, S.p.y)
+    Sim.Step(S, 1 / 60, 0, 0)
+    assert(g.pull, "magnet should pull every crystal")
+    local xp0, lv0 = S.p.xp, S.p.level
+    for _ = 1, 90 do Sim.Step(S, 1 / 60, 0, 0) end
+    assert(S.p.xp > xp0 or S.p.level > lv0 or S.state == "levelup", "pulled crystal not collected")
+    S.state = "play"; S.pendingLevels = 0
+    -- bomb: everything on screen takes damage
+    local e1, e2 = Sim.SpawnEnemy(S, "brute", S.p.x + 300, S.p.y, true), Sim.SpawnEnemy(S, "elite", S.p.x - 250, S.p.y + 100, true)
+    hold(e1); hold(e2)
+    local h1, h2 = e1.hp, e2.hp
+    Sim.Step(S, 1 / 60, 0, 0)
+    Sim.DropItem(S, "bomb", S.p.x, S.p.y)
+    Sim.Step(S, 1 / 60, 0, 0)
+    assert((e1.dead or e1.hp < h1) and e2.hp < h2, "bomb should damage everything on screen")
+    -- coin
+    local g0 = S.gold
+    Sim.DropItem(S, "coin", S.p.x, S.p.y, 7)
+    Sim.Step(S, 1 / 60, 0, 0)
+    assert(S.gold == g0 + 7, "coin value not counted")
+    print("pickups ok: brazier dropped " .. kind .. ", chicken, magnet, bomb, coin")
+  end
+  -- gold goblin flees, spills coins when killed, escapes after its life otherwise
+  do
+    local S = fresh("mage"); S.wlist = {}; S.weapons = {}
+    local gob = Sim.SpawnEnemy(S, "goblin", 150, 0, true)
+    for _ = 1, 30 do Sim.Step(S, 1 / 60, 0, 0) end
+    assert(gob.x > 150, "goblin should flee")
+    Sim.Damage(S, gob, 1e6)
+    Sim.Step(S, 1 / 60, 0, 0)
+    local coins = 0
+    for i = 1, S.nI do if S.items[i].kind == "coin" and S.items[i].value then coins = coins + 1 end end
+    assert(coins == C.ENEMIES.goblin.coins, "goblin coins: " .. coins)
+    local gob2 = Sim.SpawnEnemy(S, "goblin", 150, 0, true)
+    for _ = 1, 60 * 16 do Sim.Step(S, 1 / 60, 0, 0) end
+    local alive = false
+    for i = 1, S.nE do if S.enemies[i] == gob2 and not gob2.dead then alive = true end end
+    assert(not alive and S.kills == 1, "goblin should vanish after its life without a kill")
+    print("goblin ok: fled, " .. coins .. " coins, escaped later")
+  end
+  -- corruption spreads on death
+  do
+    local S = fresh("warlock", "corruption")
+    local a = Sim.SpawnEnemy(S, "brute", 100, 0, true); hold(a)
+    local b = Sim.SpawnEnemy(S, "brute", 140, 0, true); hold(b)
+    for _ = 1, 60 do Sim.Step(S, 1 / 60, 0, 0) end
+    local victim = a.corr and a or b
+    local other = victim == a and b or a
+    other.corr = nil; other.dot, other.dotT = 0, 0
+    assert(victim.corr, "corruption applied to nobody")
+    Sim.Damage(S, victim, 1e6)
+    Sim.Step(S, 1 / 60, 0, 0)
+    assert(other.corr and other.dotT > 0, "corruption should spread on death")
+    print("corruption ok: spread on death")
+  end
+  -- every new weapon and evolved form runs together, with all new enemies around (invulnerable)
+  do
+    local S = Sim.New({ class = "mage", viewR = 600, invuln = true })
+    for _, cls in ipairs({ "mage", "warlock", "hunter" }) do
+      for _, id in ipairs(C.CLASSES[cls].kit) do
+        if not S.weapons[id] then Sim.AddWeapon(S, id) end
+        if C.WEAPONS[id .. "_evo"] then Sim.AddWeapon(S, id .. "_evo") end
+      end
+    end
+    for _, k in ipairs({ "caster", "charger", "ooze", "goblin", "brazier", "skeleton" }) do
+      for j = 1, 3 do Sim.SpawnEnemy(S, k, math.cos(j) * 250, math.sin(j) * 250, true) end
+    end
+    for f = 1, 60 * 40 do
+      if S.state == "levelup" then Sim.Choose(S, 1) end
+      Sim.Step(S, 1 / 60, math.cos(f / 90), math.sin(f / 90))
+    end
+    assert(S.kills > 50, "all-weapons run killed too little: " .. S.kills)
+    print(string.format("all new weapons ok: %d weapons, t=%.0f kills=%d zones=%d traps=%d bolts=%d", #S.wlist, S.t, S.kills, S.nZ, S.nTr, S.nEB))
+  end
+end
+
+-- the same through the addon: draw every new class kit, enemy and pickup (render paths)
+for ci, cls in ipairs({ "mage", "warlock", "hunter" }) do
+  local _, m0 = ns.State()
+  if m0 == "levelup" then key("1", true) end
+  if select(2, ns.State()) ~= "over" then key("ESCAPE", true); tick(dt); key("Q", true); tick(dt) end
+  key("C", true); key(tostring(3 + ci), true)
+  local S = ns.State()
+  assert(S.class == cls, cls .. " run")
+  S.invuln = true
+  for _, id in ipairs(ns.Content.CLASSES[cls].kit) do if not S.weapons[id] then ns.Sim.AddWeapon(S, id) end end
+  for _, k in ipairs({ "caster", "charger", "ooze", "goblin", "brazier", "skeleton" }) do
+    for j = 1, 2 do ns.Sim.SpawnEnemy(S, k, S.p.x + math.cos(j * 2 + ci) * 200, S.p.y + math.sin(j * 2 + ci) * 200, true) end
+  end
+  for _, it in ipairs({ "magnet", "chicken", "bomb", "coin" }) do ns.Sim.DropItem(S, it, S.p.x + 60, S.p.y + 20, 3) end
+  for _ = 1, 60 * 10 do
+    tick(dt)
+    if select(2, ns.State()) == "levelup" then key("1", true) end
+  end
+  S.invuln = false
+  print(string.format("render ok: %s with its whole kit, t=%.0f kills=%d", cls, S.t, S.kills))
+end
+
 -- quick save / load
 do
   key("ESCAPE", true) -- close whatever screen
@@ -440,7 +715,7 @@ do
   assert(math.abs(S.gold - g0 - 10 * S.goldMul) < 1e-6, "coin should add gold: " .. S.gold - g0)
   for _ = 1, 20 do if (S.dmgBy.crusader_evo or 0) > 0 then break end; playUntilFree(60) end
   assert((S.dmgBy.crusader_evo or 0) > 0, "damage should be credited to the evolved weapon")
-  for k in pairs(S.dmgBy) do assert(k == "other" or C.WEAPONS[k], "unknown dmgBy key " .. tostring(k)) end
+  for k in pairs(S.dmgBy) do assert(C.WEAPONS[k] or (UI.SOURCES[k] and k ~= "other"), "unknown dmgBy key " .. tostring(k)) end
   -- run end: gold banked, results screen with damage bars, guild message sent once
   S.gold = 1500.4
   _G.__inGuild = true
@@ -528,6 +803,140 @@ do
   settle()
   print(string.format("systems ok: chest, evolution, achievement toast, coins, results with DPS, gold %d, shop, curses, guild board %d, reroll/skip, sound",
     ns.db.gold, #ns.Social.Board()))
+end
+-- merged 0.5: new-class evolutions through chests, pets after evolving, sounds of map events, every class's
+-- damage attributed to a named source on the results screen
+do
+  local UI, Sim, C = ns.UI, ns.Sim, ns.Content
+  local function settle()
+    if not frame._shown then try(SlashCmdList.AZEROTHSURVIVORS, "") end
+    for _ = 1, 20 do
+      local _, m = ns.State()
+      if m == "over" then return end
+      if m == "levelup" then key("1", true)
+      elseif m == "chest" then key("SPACE", true)
+      elseif m == "play" then key("ESCAPE", true)
+      elseif m == "pause" then key("Q", true)
+      elseif m == "title" then key("SPACE", true) end
+    end
+    assert(select(2, ns.State()) == "over", "could not reach game over")
+  end
+  local function play(n)
+    for _ = 1, n do
+      tick(dt)
+      local _, m = ns.State()
+      if m == "levelup" then key("1", true) elseif m == "chest" then key("SPACE", true); key("SPACE", true) end
+    end
+  end
+  local function startClass(cls)
+    settle()
+    key("C", true)
+    for i, id in ipairs(C.CLASS_ORDER) do if id == cls then key(tostring(i), true) end end
+    local S = ns.State()
+    assert(S.class == cls and select(2, ns.State()) == "play", "start " .. cls)
+    S.invuln = true
+    return S
+  end
+  local function evolveByChest(S, wid)
+    local r
+    for _, x in ipairs(C.EVOLUTIONS) do if x.weapon == wid then r = x end end
+    assert(r and C.WEAPONS[r.into], "recipe for " .. wid)
+    if not S.weapons[wid] then
+      if #S.wlist >= S.wslots then table.remove(S.wlist) end
+      Sim.AddWeapon(S, wid)
+    end
+    while S.weapons[wid].level < C.MAX_WEAPON_LEVEL do Sim.LevelWeapon(S, wid) end
+    if not S.passives[r.passive] then Sim.AddPassive(S, r.passive) end
+    local slot
+    for i, w in ipairs(S.wlist) do if w.id == wid then slot = i end end
+    Sim.DropItem(S, "chest", S.p.x, S.p.y, 1)
+    tick(dt)
+    assert(select(2, ns.State()) == "chest", "chest screen for " .. wid)
+    key("SPACE", true)
+    assert(S.weapons[r.into] and not S.weapons[wid] and S.wlist[slot].id == r.into, wid .. " should evolve into " .. r.into)
+    assert(S.chestRewards[1].kind == "evolve", "chest reward is the evolution")
+    key("SPACE", true)
+    return S.weapons[r.into]
+  end
+  -- Mage: Frostbolt -> Frostfire Bolt
+  local S = startClass("mage")
+  play(120)
+  local w = evolveByChest(S, "frostbolt")
+  play(600)
+  assert((S.dmgBy.frostbolt_evo or 0) > 0, "Frostfire Bolt should deal damage")
+  -- Hunter: Call Wolf -> The Beast Within; Warlock: Summon Imp -> Demonic Legion; pets keep fighting
+  for _, pc in ipairs({ { "hunter", "wolf" }, { "warlock", "imp" } }) do
+    S = startClass(pc[1])
+    play(120)
+    if not S.weapons[pc[2]] then Sim.AddWeapon(S, pc[2]) end
+    play(60)
+    assert(S.weapons[pc[2]].pets and #S.weapons[pc[2]].pets >= 1, pc[2] .. " pets before evolving")
+    w = evolveByChest(S, pc[2])
+    play(900)
+    assert(w.pets and #w.pets == w.count, pc[2] .. " evolved pets: " .. tostring(w.pets and #w.pets))
+    assert((S.dmgBy[w.id] or 0) > 0, w.id .. " pets should deal damage")
+    for _, p in ipairs(w.pets) do assert(p.x == p.x and math.abs(p.x - S.p.x) < 2000, "pet position") end
+    if not _G.__noArt then -- the pre-evolution pet textures are hidden: exactly one shown texture per pet
+      local n = 0
+      local function walk(r)
+        for _, c in ipairs(r._children) do
+          if c._kind == "Texture" and c._shown and type(c._tex) == "string" and c._tex:match("\\" .. pc[2] .. "$") then n = n + 1 end
+          walk(c)
+        end
+      end
+      walk(frame)
+      assert(n == w.count, pc[2] .. ": " .. n .. " pet textures shown for " .. w.count .. " pets")
+    end
+  end
+  -- Blessed Hammers -> Hammer of the Righteous: the old orbit textures are hidden
+  S = startClass("paladin")
+  play(60)
+  w = evolveByChest(S, "hammers")
+  play(30)
+  if not _G.__noArt then
+    local n = 0
+    local function walk(r)
+      for _, c in ipairs(r._children) do
+        if c._kind == "Texture" and c._shown and type(c._tex) == "string" and c._tex:match("\\hammer$") then n = n + 1 end
+        walk(c)
+      end
+    end
+    walk(frame)
+    assert(n == w.count, "hammers: " .. n .. " orbit textures shown for " .. w.count)
+  end
+  -- every class, 60 s each: all damage goes to a named skill or source (no "Other" row)
+  for _, cls in ipairs(C.CLASS_ORDER) do
+    S = startClass(cls)
+    play(3600)
+    assert(not S.dmgBy.other, cls .. ": damage credited to 'other': " .. tostring(S.dmgBy.other))
+    for k in pairs(S.dmgBy) do assert(C.WEAPONS[k] or UI.SOURCES[k], cls .. ": unknown damage source " .. k) end
+    settle()
+    for _, r in ipairs(UI.panels.over.rows) do
+      if r._shown then assert(r.name._text ~= "Other", cls .. ": results screen shows Other") end
+    end
+  end
+  -- a bomb pickup is credited to the Goblin Bomb row
+  S = startClass("paladin")
+  play(300)
+  Sim.DropItem(S, "bomb", S.p.x, S.p.y)
+  play(2)
+  assert((S.dmgBy.bomb or 0) > 0, "bomb damage")
+  assert(played[SOUNDKIT.UI_73_ARTIFACT_OVERLOADED_ORB_IMPACT_MEDIUM], "bomb sound")
+  S.hooks.fx(S, "ring"); S.hooks.fx(S, "goblin", S.p.x, S.p.y); S.hooks.fx(S, "goblinKilled", S.p.x, S.p.y)
+  assert(played[SOUNDKIT.UI_GARRISON_TOAST_INVASION_ALERT] and played[SOUNDKIT.UI_BONUS_LOOT_ROLL_START]
+    and played[SOUNDKIT.TRADING_POST_UI_COLLECTING_COINS], "event sounds")
+  Sim.DropItem(S, "chicken", S.p.x, S.p.y); Sim.DropItem(S, "magnet", S.p.x, S.p.y)
+  play(2)
+  assert(played[SOUNDKIT.UI_ADVENTURES_HEAL_FOLLOWER] and played[SOUNDKIT.UI_POWER_AURA_GENERIC], "pickup sounds")
+  local br = Sim.SpawnEnemy(S, "brazier", S.p.x + 30, S.p.y, true)
+  Sim.Damage(S, br, 1e6)
+  assert(played[SOUNDKIT.PUT_DOWN_SMALL_CHAIN], "brazier sound")
+  S.lastHit = nil
+  settle()
+  local found
+  for _, r in ipairs(UI.panels.over.rows) do if r._shown and r.name._text == "Goblin Bomb" then found = true end end
+  assert(found, "results screen should label bomb damage Goblin Bomb")
+  print("merge ok: frostbolt/wolf/imp evolve via chest, evolved pets fight, no 'other' damage for 6 classes, Goblin Bomb row")
 end
 try(SlashCmdList.AZEROTHSURVIVORS, "stress 600")
 for _ = 1, 600 do tick(dt) end

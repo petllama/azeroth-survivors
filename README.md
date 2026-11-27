@@ -2,6 +2,8 @@
 
 A Vampire Survivors-style arcade game that runs inside WoW: Forever as an addon. Survive the Scourge for 10 minutes; spells cast themselves, you move and pick upgrades.
 
+Version 0.5.0 has six classes with 30 skills and 30 evolutions, treasure chests, gold and a permanent Shop, optional curses, map events (skeleton rings, a gold goblin, braziers with pickups), new enemies (skeleton mages, charging worgen, splitting oozes), arenas themed on the zone you play in, a results screen with damage per skill, achievements with unlocks, a guild leaderboard and sound effects.
+
 ## Install
 
 Download `AzerothSurvivors-<version>.zip` from [Releases](https://github.com/petllama/azeroth-survivors/releases) and unzip it into `World of Warcraft/_forever_/Interface/AddOns/` so you get `AddOns/AzerothSurvivors/AzerothSurvivors.toc`. A first install needs a full game restart; updates need `/reload`, except 0.5.0, which adds a file (`Social.lua`): restart the game once.
@@ -10,7 +12,7 @@ Built for WoW: Forever (interface 16001, a retail-based client). It uses only pl
 
 ## Play
 
-- `/azs` (or `/survivors`, or the addon compartment button) opens the window. `SPACE` starts a run.
+- `/azs` (or `/survivors`, or the addon compartment button) opens the window. On the class screen `1`-`6` (or a click) starts that class and `SPACE` the highlighted one; the Shop, Curses, Achievements and Guild buttons open panels that `ESC` closes.
 - `WASD` / arrow keys move. `1` `2` `3` (`4` with Insight) or a click picks a level-up; `R` rerolls the cards and `S` skips the level when you have rerolls / skips (see the Shop). `ESC` pauses; `Q` in the pause screen ends the run.
 - A treasure chest opens with `SPACE` (or `ENTER` / `1` / the button); `SPACE` again reveals the rest and continues.
 - Movement keys are captured only while a run is playing; on the title, pause and game-over screens your character can walk.
@@ -24,21 +26,37 @@ On the game-over screen `SPACE` replays the same class and `C` returns to class 
 
 Other commands: `/azs save` / `/azs load`, `/azs flight`, `/azs sound` (sound effects on/off), `/azs board` (guild leaderboard in chat), `/azs anim` (movement animations on/off), `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (stress test with 600 enemies, invulnerable), `/azs numbers` (damage numbers on/off), `/azs scale 0.8`, `/azs reset` (window position).
 
-## Classes (0.2.0)
+## Classes
 
-Pick a class on the title screen (`1` `2` `3` or click). Each has its own five skills; passives are shared.
+Pick a class on the title screen (`1`-`6` or click). Each has its own five skills; passives are shared.
 
 | Class | Style | Skills |
 |---|---|---|
 | Paladin | 120 hp, armored | **Crusader Strike** (start, frontal swing), Consecration (burning ground), Blessed Hammers (orbiting), Avenger's Shield (bounces between enemies), Divine Storm (spin that heals per enemy hit) |
 | Rogue | 85 hp, fast, 15% crit | **Sinister Strike** (start, quick stabs), Fan of Knives (ring of knives), Shuriken Toss (piercing star), Blade Flurry (tight orbiting blades), Deadly Poison (all hits poison) |
 | Druid | 110 hp, regenerates | **Wrath** (start, nature bolts), Moonfire (strikes + burn), Starfall (falling stars, area damage), Thorns (aura + damages attackers), Entangling Roots (roots everything nearby) |
+| Mage | 110 hp, slowly heals | **Frostbolt** (start, bolts that slow), Fireball (explodes in an area), Arcane Missiles (homing volley), Blizzard (ice storm on the thickest pack: damage + slow), Frost Nova (freezes everything around you) |
+| Warlock | 100 hp, drains life | **Shadow Bolt** (start), Corruption (damage over time that spreads when the victim dies), Rain of Fire (falling fel fire zones), Drain Life (beam on the nearest enemies that heals you), Summon Imp (a pet that follows you and throws firebolts) |
+| Hunter | 105 hp, 10% crit | **Auto Shot** (start, piercing arrows), Multi-Shot (fan of arrows), Explosive Trap (mines that explode when stepped on), Volley (arrows rain on a pack), Call Wolf (a pet that hunts down and bites enemies) |
 
 Passives (5 slots, level 5 max): Might, Haste, Sprint, Fortitude, Renew, Greed, Devotion, Arcane Reach, Precision (crit). Critical hits deal double damage (orange numbers); burns and poison tick in green.
 
-Enemies: ghouls, bats, wraiths, brutes, an elite death knight every minute (drops a potion), bat swarms every 90 s, the Frost Lich at 8:00. Win at 10:00. Best run is saved per class.
+## Enemies and events
 
-## Chests and evolutions (0.5.0)
+Ghouls, bats, wraiths, brutes, an elite death knight every minute (drops a potion), bat swarms every 90 s, the Frost Lich at 8:00. Win at 10:00. Best run is saved per class.
+
+From 2:30 new enemies join the waves:
+- **Skeleton mages** keep about 220 px away and fire slow bolts: dodge them (armor and the hit grace period apply).
+- **Worgen** stop, glow orange and show their dash line, then charge in a straight line.
+- **Oozes** split into two small oozelets when they die.
+
+Map events: a **ring of skeletons** closes in at 3:30 and 6:30; a **gold goblin** appears at 1:40, 4:20 and 7:00 and flees: catch it before it escapes (15 s) for a pile of gold coins. **Braziers** burn near you every 30 s (up to 3): break them for a pickup: **magnet** (every crystal flies to you), **chicken** (heals 30%) or **bomb** (damages everything on screen).
+
+## Zones
+
+The arena takes the look of where you play: Tirisfal (and other dark lands), the Barrens (and other dry lands), Elwynn (green lands) or the frozen north. Each theme has its own ground and leans the waves (more skeleton mages in Tirisfal, worgen in the Barrens, oozes in Elwynn, wraiths and bats in the snow). The zone comes from your map (`C_Map.GetBestMapForUnit`), walking up to the continent by name; elsewhere the arena keeps the default ground.
+
+## Chests and evolutions
 
 Elites drop a treasure chest (1 upgrade) and The Frost Lich drops a big one (3 upgrades). Picking it up pauses the game; open it to reveal the upgrades one after another. An upgrade is a **weapon evolution** when one is ready, otherwise a level of a skill or passive you own, otherwise gold.
 
@@ -61,10 +79,25 @@ A skill evolves when it is at level 6 and you own its passive (any level). Only 
 | Druid | Starfall + Arcane Reach | Celestial Alignment |
 | Druid | Thorns + Devotion | Brambles |
 | Druid | Entangling Roots + Greed | Ursol's Vortex |
+| Mage | Frostbolt + Haste | Frostfire Bolt |
+| Mage | Fireball + Might | Pyroblast |
+| Mage | Arcane Missiles + Precision | Arcane Barrage |
+| Mage | Blizzard + Arcane Reach | Frozen Tempest |
+| Mage | Frost Nova + Devotion | Deep Freeze |
+| Warlock | Shadow Bolt + Might | Chaos Bolt |
+| Warlock | Corruption + Renew | Unstable Affliction |
+| Warlock | Rain of Fire + Arcane Reach | Hellfire Rain |
+| Warlock | Drain Life + Fortitude | Drain Soul |
+| Warlock | Summon Imp + Haste | Demonic Legion (four imps) |
+| Hunter | Auto Shot + Precision | Aimed Shot |
+| Hunter | Multi-Shot + Haste | Barrage |
+| Hunter | Explosive Trap + Arcane Reach | Expert Trapper |
+| Hunter | Volley + Might | Hail of Arrows |
+| Hunter | Call Wolf + Sprint | The Beast Within (four wolves) |
 
 ## Gold and the Shop
 
-Kills sometimes drop gold coins; elites drop a pile and the boss a lot. Coins fly to you like crystals. Gold from a run (shown under the kill count) is banked when the run ends, also when you quit or die. The **Shop** button on the class screen spends it on permanent upgrades with ranks and rising prices:
+Kills sometimes drop gold coins; elites and the gold goblin drop a pile and the boss a lot. Coins fly to you like crystals. Gold from a run (shown under the kill count) is banked when the run ends, also when you quit or die. The **Shop** button on the class screen spends it on permanent upgrades with ranks and rising prices:
 
 Might (+5% damage), Armor (-1 damage taken), Max HP (+10%), Recovery (+0.2 health/sec), Swiftness (+5% speed), Greed (+20% pickup range), Growth (+5% XP), **Reroll** (+1 reroll per run, `R` on the level-up screen), **Skip** (+1 skip per run, `S`), Insight (a 4th card on level-up).
 
@@ -74,10 +107,10 @@ The **Curses** button turns on optional, stacking difficulty: Horde (+50% spawn 
 
 ## Results, achievements and the guild board
 
-- The results screen shows time, level, kills, gold earned and the damage of every skill as bars with its DPS (damage over the time you had the skill).
-- **Achievements** (button on the class screen, a toast when earned): survive 5 and 10 minutes, win with each class, kill the boss, 1000 kills in one run, evolve a weapon, win with 2+ curses, win with every base class. Some unlock things: *survive 10 minutes as a Rogue* gives +1 reroll every run, *evolve a weapon* a 6th weapon slot (level-ups may then offer other classes' skills), *win with every base class* the title Champion of Azeroth on the class screen.
+- The results screen shows time, level, kills, gold earned and the damage of every skill (and of Goblin Bombs) as bars with its DPS (damage over the time you had the skill). Overkill is not counted.
+- **Achievements** (button on the class screen, a toast when earned): survive 5 and 10 minutes, win with each of the six classes, kill the boss, 1000 kills in one run, evolve a weapon, win with 2+ curses, and *Champion of Azeroth*: win with all six classes. Some unlock things: *survive 10 minutes as a Rogue* gives +1 reroll every run, *evolve a weapon* a 6th weapon slot (level-ups may then offer other classes' skills, pets included), *Champion of Azeroth* the title on the class screen.
 - **Guild:** when a run ends and you are in a guild, the addon sends one hidden addon message to your guild with class, time, kills, level and win. Guild members with the addon keep the best run per player and class; the **Guild** button lists the top entries and `/azs board` prints them.
-- **Sound:** level-up, chest, evolution, coins, getting hit, the boss, death, victory and achievements play built-in WoW sounds (no files shipped); `/azs sound` turns them off.
+- **Sound:** level-up, chest, evolution, coins, getting hit (and hit by an enemy bolt), the boss, the gold goblin (appears and killed), skeleton rings, bombs, chickens, magnets, breaking a brazier, death, victory and achievements play built-in WoW sounds (no files shipped, rapid repeats are throttled); `/azs sound` turns them off.
 
 Saves from 0.4 still load; a run keeps the shop ranks and curses it started with.
 
@@ -85,9 +118,9 @@ Saves from 0.4 still load; a run keeps the shop ranks and curses it started with
 
 - `AzerothSurvivors/Content.lua` data and balance; `Sim.lua` pure-Lua simulation (no WoW API, spatial grid, pooled entities); `Render.lua` pooled textures/lines/numbers; `UI.lua` HUD, panels (level-up, chest, results, shop, curses, achievements, guild, toast); `Social.lua` guild leaderboard (addon messages); `Main.lua` window, keyboard, loop, sound, achievements, slash commands.
 - `AzerothSurvivors/Art/*.tga` sprites made with the local FLUX model (`tools/art/`, see its README).
-- `CLASS=rogue tests/run_sim.lua [seed] play|stress [cap]` headless run with a bot (`VACUUM=1` = perfect pickup, `META=max` or `META=might:3,armor:1` shop ranks, `CURSES=horde,brutal`), prints result, gold, chests, evolutions, damage share per skill and ms per step.
-- `tests/test_save.lua` save/load round trip for every class.
-- `tests/run_addon.lua [seconds]` loads the whole addon on a mock client and plays: open, start, move, level-ups, pause, combat pause, quit, restart, class select and a run with every class, quick save/load, a mocked flight (card, play, landing guard, learned time, not now, fight, don't ask again), stress.
+- `CLASS=rogue [ZONE=barrens] tests/run_sim.lua [seed] play|stress [cap]` headless run with a bot (`VACUUM=1` = perfect pickup, `META=max` or `META=might:3,armor:1` shop ranks, `CURSES=horde,brutal`), prints result, gold, chests, evolutions, damage share per skill and ms per step.
+- `tests/test_save.lua` save/load round trip for every class (shop ranks, curses, evolutions, gold, chests, zone, event cursors and pickup values kept; enemy bolts, ground zones, traps and pets are transient and start fresh; version 1 saves still load).
+- `tests/run_addon.lua [seconds]` loads the whole addon on a mock client and plays: open, start, move, level-ups, pause, combat pause, quit, restart, class select and a run with every class, quick save/load, a mocked flight (card, play, landing guard, learned time, not now, fight, don't ask again), stress; chests, evolutions, shop, curses, achievements, results screen and guild board; plus content checks on the sim: pets deal damage, an enemy bolt hits the player, the charger telegraphs and dashes, oozes split, brazier pickups (magnet, chicken, bomb, coin), the goblin, Corruption spreading, and a zone theme from a mocked map.
 - `tools/install.sh` syntax check + offline test, then copies into `_forever_/Interface/AddOns/AzerothSurvivors`. First install (and any new file) needs a full game restart, not `/reload`.
 
 ## Performance

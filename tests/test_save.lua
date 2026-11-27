@@ -21,11 +21,14 @@ local checks = 0
 for _, cls in ipairs(C.CLASS_ORDER) do
   math.randomseed(3)
   local meta = { might = 2, armor = 1, maxhp = 3, recovery = 1, swift = 1, greed = 2, growth = 1, reroll = 2, skip = 1 }
-  local S = Sim.New({ class = cls, viewR = 600, invuln = true, meta = meta, curses = { frail = true, brutal = true }, unlocks = { slot = 1 } })
+  local zones = { mage = "tirisfal", warlock = "barrens", hunter = "snow" }
+  local S = Sim.New({ class = cls, zone = zones[cls], viewR = 600, invuln = true, meta = meta,
+    curses = { frail = true, brutal = true }, unlocks = { slot = 1 } })
   local dt = 1 / 60
-  while S.t < 150 and S.state ~= "dead" do
+  local until_ = zones[cls] and 230 or 150 -- the new classes play past a goblin and a skeleton ring
+  while S.t < until_ and S.state ~= "dead" do
     if S.state == "levelup" then
-      if S.t > 100 and cls ~= "druid" then break end -- save some runs mid level-up
+      if S.t > until_ - 50 and cls ~= "druid" and cls ~= "hunter" then break end -- save some runs mid level-up
       Sim.Choose(S, 1)
     elseif S.state == "chest" then
       Sim.OpenChest(S); Sim.CloseChest(S)
@@ -58,11 +61,23 @@ for _, cls in ipairs(C.CLASS_ORDER) do
   same(S2.gold, S.gold, "gold"); same(S2.rerolls, S.rerolls, "rerolls"); same(S2.skips, S.skips, "skips")
   same(S2.p.armor, S.p.armor, "armor"); same(S2.p.regen, S.p.regen, "regen"); same(S2.p.magnet, S.p.magnet, "magnet")
   same(S2.xpMul, S.xpMul, "xpMul"); same(S2.goldMul, S.goldMul, "goldMul"); same(S2.eHpMul, S.eHpMul, "eHpMul")
-  same(S2.wslots, S.wslots, "wslots"); same(S2.nEvolved, S.nEvolved, "nEvolved"); same(S2.nI, S.nI, "items")
+  same(S2.wslots, S.wslots, "wslots"); same(S2.nEvolved, S.nEvolved, "nEvolved")
   for k, v in pairs(S.dmgBy) do same(S2.dmgBy[k], v, "dmgBy." .. k) end
   for k, v in pairs(S.evolved) do assert(S2.evolved[k] == v, cls .. " evolved " .. k) end
-  for i = 1, S.nI do assert(S2.items[i].kind == S.items[i].kind and S2.items[i].value == S.items[i].value, cls .. " item " .. i) end
   assert(next(S.dmgBy), cls .. " no damage recorded")
+  assert(S2.zone == S.zone, cls .. " zone")
+  same(S2.ev.ring, S.ev.ring, "event ring"); same(S2.ev.goblin, S.ev.goblin, "event goblin"); same(S2.ev.brazier, S.ev.brazier, "event brazier")
+  local liveItems, value, value2 = 0, 0, 0
+  for i = 1, S.nI do local it = S.items[i]; if not it.dead then liveItems = liveItems + 1; value = value + (it.value or 0) end end
+  for i = 1, S2.nI do value2 = value2 + (S2.items[i].value or 0) end
+  same(S2.nI, liveItems, "items"); same(value2, value, "item values")
+  -- transient content is dropped, not carried over half-built
+  assert(S2.nEB == 0 and S2.nZ == 0 and S2.nTr == 0, cls .. " transient lists should start empty")
+  local k2 = 0
+  for i = 1, S.nI do
+    local it = S.items[i]
+    if not it.dead then k2 = k2 + 1; assert(S2.items[k2].kind == it.kind and S2.items[k2].value == it.value, cls .. " item " .. i) end
+  end
   local live = 0
   for i = 1, S.nE do if not S.enemies[i].dead then live = live + 1 end end
   same(S2.nE, live, "enemies")
@@ -70,6 +85,7 @@ for _, cls in ipairs(C.CLASS_ORDER) do
   for i, w in ipairs(S.wlist) do
     local w2 = S2.wlist[i]
     assert(w2.id == w.id and w2.level == w.level, cls .. " weapon " .. w.id)
+    if w.pets then assert(w2.pets == nil, "pets respawn on load") end
     for k, v in pairs(w) do
       if type(v) == "number" and k ~= "npts" then same(w2[k], v, "weapon " .. w.id .. "." .. k) end
     end
@@ -80,8 +96,18 @@ for _, cls in ipairs(C.CLASS_ORDER) do
   -- the rebuilt run keeps playing
   if S2.state == "levelup" then Sim.Choose(S2, 1) end
   for _ = 1, 600 do Sim.Step(S2, dt, 1, 0) end
-  print(string.format("%s ok: t=%.1f level=%d weapons=%d passives=%d enemies=%d gems=%d state=%s -> continued to t=%.1f",
-    cls, S.t, S.p.level, #S.wlist, #S.plist, live, S.nG, S.state, S2.t))
+  print(string.format("%s ok: t=%.1f level=%d weapons=%d passives=%d enemies=%d gems=%d items=%d zone=%s ev=%d/%d state=%s -> continued to t=%.1f",
+    cls, S.t, S.p.level, #S.wlist, #S.plist, live, S.nG, liveItems, tostring(S.zone), S.ev.ring, S.ev.goblin, S.state, S2.t))
+end
+-- an older save without zone/event cursors: events already past at its time do not fire again
+do
+  local S = Sim.New({ class = "mage", viewR = 600, invuln = true })
+  S.t = 300
+  local d = Sim.Serialize(S)
+  d.ev, d.zone = nil, nil
+  local S2 = assert(Sim.Deserialize(d, { viewR = 600 }))
+  assert(S2.ev.ring == 2 and S2.ev.goblin == 3 and S2.ev.brazier >= 300, "events from t for old saves")
+  checks = checks + 1
 end
 -- a version 1 save (0.4.x) still loads with empty new fields
 do
@@ -89,6 +115,8 @@ do
   for _ = 1, 120 do Sim.Step(S, 1 / 60, 1, 0) end
   local d = Sim.Serialize(S)
   d.v, d.gold, d.dmgBy, d.meta, d.curses, d.unlocks, d.gotAt, d.rerolls, d.skips, d.chestN = 1, nil, nil, nil, nil, nil, nil, nil, nil, nil
+  d.zone, d.ev, d.chests, d.coinBank = nil, nil, nil, nil -- 0.4.x saves had no zone or event cursors either
+  for _, it in ipairs(d.items) do it[4] = nil end
   local S2 = assert(Sim.Deserialize(d, { viewR = 600 }), "v1 save should load")
   assert(S2.gold == 0 and S2.rerolls == 0 and next(S2.meta) == nil, "v1 defaults")
   for _ = 1, 60 do Sim.Step(S2, 1 / 60, 1, 0) end
