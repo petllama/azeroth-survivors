@@ -20,10 +20,12 @@ end
 local checks = 0
 for _, cls in ipairs(C.CLASS_ORDER) do
   math.randomseed(3)
-  local meta = { might = 2, armor = 1, maxhp = 3, recovery = 1, swift = 1, greed = 2, growth = 1, reroll = 2, skip = 1 }
+  local meta = { might = 7, armor = 1, maxhp = 3, recovery = 1, swift = 1, greed = 2, growth = 1, reroll = 2, skip = 1,
+    cooldown = 2, area = 3, magnet = 1, luck = 2, banish = 2, revival = 1, amount = 1 }
   local zones = { mage = "tirisfal", warlock = "barrens", hunter = "snow" }
+  local asc = ({ paladin = 3, mage = 10, hunter = 1 })[cls] or 0
   local S = Sim.New({ class = cls, zone = zones[cls], viewR = 600, invuln = true, meta = meta,
-    curses = { frail = true, brutal = true }, unlocks = { slot = 1 } })
+    curses = { frail = true, brutal = true }, unlocks = { slot = 1 }, asc = asc })
   local dt = 1 / 60
   local until_ = zones[cls] and 230 or 150 -- the new classes play past a goblin and a skeleton ring
   while S.t < until_ and S.state ~= "dead" do
@@ -49,8 +51,14 @@ for _, cls in ipairs(C.CLASS_ORDER) do
     Sim.DropItem(S, "chest", S.p.x + 300, S.p.y, 3)
     Sim.DropItem(S, "coin", S.p.x + 200, S.p.y, 7)
   end
+  -- 0.6 state: Limit Break stacks, a banished card, a revive used, Endless after the win
+  for _, id in ipairs({ "might", "maxhp", "haste", "speed", "amount", "crit", "area", "magnet", "might" }) do Sim.AddLimit(S, id) end
+  S.lbPicks, S.lbAmtAt = 9, 5
+  S.banished.might, S.banishes, S.revives, S.revived = true, 1, 0, 1
+  if cls == "rogue" then S.won10, S.endless, S.banked, S.nextBoss, S.bossN = true, true, 77, 900, 1 end
+
   local d = Sim.Serialize(S)
-  assert(d.v == 2, "save version 2")
+  assert(d.v == 3, "save version 3")
   plain(d, {}, "save")
   local S2 = assert(Sim.Deserialize(d, { viewR = 600 }))
   local function same(a, b, what) assert(math.abs(a - b) < 1e-6, cls .. " " .. what .. ": " .. tostring(a) .. " ~= " .. tostring(b)); checks = checks + 1 end
@@ -62,6 +70,16 @@ for _, cls in ipairs(C.CLASS_ORDER) do
   same(S2.p.armor, S.p.armor, "armor"); same(S2.p.regen, S.p.regen, "regen"); same(S2.p.magnet, S.p.magnet, "magnet")
   same(S2.xpMul, S.xpMul, "xpMul"); same(S2.goldMul, S.goldMul, "goldMul"); same(S2.eHpMul, S.eHpMul, "eHpMul")
   same(S2.wslots, S.wslots, "wslots"); same(S2.nEvolved, S.nEvolved, "nEvolved")
+  -- v3 (0.6)
+  same(S2.p.haste, S.p.haste, "haste"); same(S2.p.area, S.p.area, "area"); same(S2.asc, S.asc, "asc")
+  same(S2.lbPicks, S.lbPicks, "lbPicks"); same(S2.lbAmtAt, S.lbAmtAt, "lbAmtAt"); same(S2.nChoices, S.nChoices, "nChoices")
+  same(S2.revives, S.revives, "revives"); same(S2.banishes, S.banishes, "banishes"); same(S2.amount, S.amount, "amount")
+  same(S2.luck, S.luck, "luck"); same(S2.eliteEvery, S.eliteEvery, "eliteEvery"); same(S2.nextBoss, S.nextBoss, "nextBoss")
+  same(S2.bossN, S.bossN, "bossN"); same(S2.spawnMul, S.spawnMul, "spawnMul"); same(S2.eSpeedMul, S.eSpeedMul, "eSpeedMul")
+  for k, v in pairs(S.limit) do same(S2.limit[k] or 0, v, "limit." .. k) end
+  for k in pairs(S.banished) do assert(S2.banished[k], cls .. " banished " .. k) end
+  assert(S2.won10 == S.won10 and S2.endless == S.endless and S2.banked == S.banked, cls .. " Endless state")
+  for _, w in ipairs(S.wlist) do same(Sim.Count(S2, S2.weapons[w.id]), Sim.Count(S, w), "count " .. w.id) end
   for k, v in pairs(S.dmgBy) do same(S2.dmgBy[k], v, "dmgBy." .. k) end
   for k, v in pairs(S.evolved) do assert(S2.evolved[k] == v, cls .. " evolved " .. k) end
   assert(next(S.dmgBy), cls .. " no damage recorded")
@@ -120,8 +138,33 @@ do
   local S2 = assert(Sim.Deserialize(d, { viewR = 600 }), "v1 save should load")
   assert(S2.gold == 0 and S2.rerolls == 0 and next(S2.meta) == nil, "v1 defaults")
   for _ = 1, 60 do Sim.Step(S2, 1 / 60, 1, 0) end
-  assert(not Sim.Deserialize({ v = 3, class = "paladin" }), "future versions are refused")
+  assert(not Sim.Deserialize({ v = 4, class = "paladin" }), "future versions are refused")
   print("v1 save ok")
+  -- a version 2 save (0.5.x) loads with the 0.6 state at its defaults
+  local d2 = Sim.Serialize(S2)
+  d2.v = 2
+  for _, k in ipairs({ "limit", "lbPicks", "lbAmtAt", "asc", "won10", "endless", "banked", "nextBoss", "bossN", "bossKills",
+    "nextEliteEvery", "revives", "revived", "banishes", "banished" }) do d2[k] = nil end
+  for _, e in ipairs(d2.enemies) do e[15] = nil end
+  d2.bossSpawned = true
+  local S4 = assert(Sim.Deserialize(d2, { viewR = 600 }), "v2 save should load")
+  assert(S4.asc == 0 and next(S4.limit) == nil and S4.lbPicks == 0 and not S4.endless and S4.revives == 0, "v2 defaults")
+  assert(S4.nextBoss == C.RUN_SECONDS + C.ENDLESS.bossEvery and S4.bossN == 1, "v2 save past 8:00: the boss came once")
+  for _ = 1, 60 do Sim.Step(S4, 1 / 60, 1, 0) end
+  print("v2 save ok")
+  -- saved on the victory panel: reopens there, already banked
+  local V = Sim.New({ class = "rogue", viewR = 600, invuln = true })
+  V.t = C.RUN_SECONDS - 0.01
+  V.hooks.victory = function() end
+  Sim.Step(V, 1 / 60, 0, 0)
+  assert(V.state == "victory" and V.won10, "victory state")
+  V.banked = 12
+  local V2 = assert(Sim.Deserialize(Sim.Serialize(V), { viewR = 600 }))
+  assert(V2.state == "victory" and V2.won10 and V2.banked == 12, "victory state survives a save")
+  assert(Sim.KeepGoing(V2) and V2.endless and V2.state == "play", "keep going after load")
+  for _ = 1, 120 do Sim.Step(V2, 1 / 60, 0, 0) end
+  assert(V2.t > C.RUN_SECONDS + 1 and V2.state == "play", "Endless plays past 10:00")
+  print("victory save ok")
   -- saved on the chest screen: reopens on the chest screen with the same upgrades pending
   Sim.DropItem(S2, "chest", S2.p.x, S2.p.y, 3)
   Sim.Step(S2, 1 / 60, 0, 0)

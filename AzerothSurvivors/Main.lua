@@ -3,9 +3,12 @@ local addonName, ns = ...
 local C, Sim, R, UI = ns.Content, ns.Sim, ns.Render, ns.UI
 
 local DEFAULTS = { anim = true, numbers = true, debug = false, scale = 1, runs = 0, class = "paladin", flightOffer = true, sound = true, gold = 0 }
-local TABLES = { "meta", "curses", "ach", "guild" } -- db.meta = shop ranks, db.curses = active curses, db.ach = earned, db.guild = board
+-- db.meta = shop ranks, db.curses = active curses, db.ach = earned, db.guild = board,
+-- db.asc[class] = highest Ascension unlocked, db.ascSel[class] = the level chosen for the next run
+local TABLES = { "meta", "curses", "ach", "guild", "asc", "ascSel" }
 local frame, S
-local mode = "title" -- title | play | levelup | pause | over
+local mode = "title" -- title | play | levelup | pause | over | chest | victory
+local banishMode = false -- B on the level-up screen: the next card picked is banished instead
 local stressCap
 local fpsAcc, fpsN, fps, simMs, drawMs = 0, 0, 0, 0, 0
 local debugLine = ""
@@ -36,6 +39,7 @@ local SFX = {
   death    = { "UI_GARRISON_MISSION_COMPLETE_MISSION_FAIL_STINGER", 43503 },
   victory  = { "LFG_REWARDS", 17316 },
   ach      = { "UI_EPICLOOT_TOAST", 31578 },
+  revive   = { "UI_70_ARTIFACT_FORGE_TRAIT_GOLD_TRAIT", 54125 },
   buy      = { "UI_GARRISON_ARCHITECT_TABLE_UPGRADE", 44302 },
   click    = { "IG_MAINMENU_OPTION_CHECKBOX_ON", 856 },
   -- map events and pickups
@@ -90,8 +94,32 @@ local hooks = {
   pickup = function(_, kind) if PICKUP_SOUND[kind] then ns.Sfx(kind) end end,
   levelup = function(s)
     mode = "levelup"
-    UI.LevelUp(s)
+    banishMode = false
+    UI.LevelUp(s, banishMode)
     ns.Sfx("levelup")
+  end,
+  revive = function(s)
+    R.Fx(s, "revive")
+    UI.Banner(string.format("Revived!  %d left", s.revives or 0), 1, 0.9, 0.5)
+    ns.Sfx("revive")
+  end,
+  -- 10:00: the win counts now (achievements, best, gold so far, guild board, Ascension), then cash out or Endless
+  victory = function(s)
+    mode = "victory"
+    local db = ns.db
+    if db.save and (db.save.runId == nil or db.save.runId == s.runId) then db.save = nil end -- this run's old save
+    local res = { gold = 0 }
+    if not s.stress then
+      res.gold = math.floor(s.gold or 0)
+      s.banked = res.gold
+      db.gold = (db.gold or 0) + res.gold
+      ns.RecordBest(s, true)
+      ns.CheckAchievements(s, true)
+      res.ascUnlocked = ns.AscUnlock(s)
+      ns.Social.OnRunEnd(s, true)
+    end
+    UI.Victory(s, res)
+    ns.Sfx("victory")
   end,
   chest = function(s)
     mode = "chest"
@@ -104,26 +132,66 @@ local hooks = {
   end,
   over = function(s, won)
     mode = "over"
+    banishMode = false
+    won = won or s.won10 or false -- a run that reached 10:00 stays a win, also when it falls in Endless
     local db = ns.db
     -- the run is over: its quick save goes too (a save of another run stays; old saves have no id)
     if db.save and (db.save.runId == nil or db.save.runId == s.runId) then db.save = nil end
     local res = { gold = 0 }
     if not s.stress then
       db.runs = (db.runs or 0) + 1
-      db.bestByClass = db.bestByClass or {}
-      local b = db.bestByClass[s.class]
-      res.newBest = not b or (won and not b.won) or (won == (b.won or false) and s.t > b.t)
-      if res.newBest then db.bestByClass[s.class] = { t = s.t, level = s.p.level, kills = s.kills, won = won } end
-      -- bank the run's gold
+      res.newBest = ns.RecordBest(s, won)
+      -- bank the run's gold; what was banked at 10:00 is not banked again
       res.gold = math.floor(s.gold or 0)
-      db.gold = (db.gold or 0) + res.gold
+      db.gold = (db.gold or 0) + math.max(0, res.gold - (s.banked or 0))
+      s.banked = res.gold
       res.ach = ns.CheckAchievements(s, won)
-      ns.Social.OnRunEnd(s, won)
+      if not s.won10 or s.endless then ns.Social.OnRunEnd(s, won) end -- a cash-out was sent at 10:00
     end
     UI.Over(s, won, res)
     ns.Sfx(won and "victory" or "death")
   end,
 }
+
+-- best run per class: a win beats a loss, then the longer time (Endless counts); returns true when new
+function ns.RecordBest(s, won)
+  local db = ns.db
+  db.bestByClass = db.bestByClass or {}
+  local b = db.bestByClass[s.class]
+  local newBest = not b or (won and not b.won) or (won == (b.won or false) and s.t > b.t)
+  if newBest then
+    db.bestByClass[s.class] = { t = s.t, level = s.p.level, kills = s.kills, won = won and true or false,
+      asc = (s.asc or 0) > 0 and s.asc or nil, endless = s.endless and math.floor(Sim.EndlessTime(s)) or nil }
+  end
+  return newBest
+end
+
+-- Ascension: a win with all four curses unlocks A1 for the class; a win at the class's top level the next one.
+-- Returns the newly unlocked level or nil.
+function ns.AscUnlock(s)
+  local db = ns.db
+  local top, lv = db.asc[s.class] or 0, s.asc or 0
+  local _, _, nc = C.CurseMult(s.curses)
+  local new
+  if lv == 0 and top == 0 and nc >= #C.CURSES then new = 1
+  elseif lv > 0 and lv == top and top < C.ASC_MAX then new = top + 1 end
+  if not new then return nil end
+  db.asc[s.class] = new
+  UI.Toast({ id = "asc", icon = "Interface\\Icons\\Spell_Holy_DivineIntervention", name = "Ascension " .. new,
+    desc = "Unlocked for " .. C.CLASSES[s.class].name .. ": pick it on the class screen." })
+  return new
+end
+
+-- the class screen's Ascension - / +
+function ns.AscStep(d)
+  local db = ns.db
+  local cls = db.class
+  local top = db.asc[cls] or 0
+  db.ascSel[cls] = math.max(0, math.min(top, (db.ascSel[cls] or 0) + d))
+  ns.Sfx("click")
+  UI.TitleBest(db, cls)
+  return db.ascSel[cls]
+end
 
 ---------------------------------------------------------------------------
 -- achievements (data and pure checks in Content: C.ACHIEVEMENTS)
@@ -135,7 +203,7 @@ function ns.RunSummary(s, won)
   for k in pairs(ns.db.ach) do have[k] = true end
   return { class = s.class, t = s.t, won = won and true or false, kills = s.kills, level = s.p.level,
     bossKilled = s.bossKilled and true or false, evolved = s.nEvolved or 0, curses = countCurses(s.curses),
-    gold = s.gold or 0, have = have }
+    gold = s.gold or 0, have = have, asc = s.asc or 0, endless = Sim.EndlessTime(s) }
 end
 
 -- award every achievement whose check passes; returns the new ones
@@ -164,7 +232,7 @@ end
 function ns.Buy(id)
   local db = ns.db
   local rank = db.meta[id] or 0
-  local cost = C.ShopCost(id, rank)
+  local cost = C.ShopCost(id, rank) -- prestige ranks (6-10) only once ranks 1-5 are owned
   if not cost or (db.gold or 0) < cost then return false end
   db.gold = db.gold - cost
   db.meta[id] = rank + 1
@@ -201,9 +269,10 @@ local function startRun()
   local cls = C.CLASSES[ns.db.class] and ns.db.class or "paladin"
   local stress = stressCap and true or nil
   local zone = ns.DetectZone()
+  local asc = not stress and math.min(ns.db.asc[cls] or 0, ns.db.ascSel[cls] or 0) or 0
   S = Sim.New({ class = cls, zone = zone, viewR = viewR(), hooks = hooks, stress = stress, cap = stressCap,
     meta = not stress and ns.db.meta or nil, curses = not stress and ns.db.curses or nil,
-    unlocks = not stress and C.UnlockBonus(ns.db.ach) or nil })
+    unlocks = not stress and C.UnlockBonus(ns.db.ach) or nil, asc = asc })
   S.achT = 0
   S.runId = string.format("%d-%d", time and time() or 0, math.random(1, 999999))
   R.SetClass(C.CLASSES[cls])
@@ -216,7 +285,7 @@ local function startRun()
 end
 
 local function pause(reason)
-  if mode == "play" then mode = "pause"; UI.Pause(reason, ns.db.save) end
+  if mode == "play" then mode = "pause"; UI.Pause(reason, S) end
 end
 
 local function resume()
@@ -227,8 +296,8 @@ end
 -- quick save / load (one slot, in SavedVariables: survives /reload and logout)
 ---------------------------------------------------------------------------
 local function runActive()
-  return S and not S.stress and (S.state == "play" or S.state == "levelup" or S.state == "chest")
-    and (mode == "play" or mode == "pause" or mode == "levelup" or mode == "chest")
+  return S and not S.stress and (S.state == "play" or S.state == "levelup" or S.state == "chest" or S.state == "victory")
+    and (mode == "play" or mode == "pause" or mode == "levelup" or mode == "chest" or mode == "victory")
 end
 
 local function saveRun()
@@ -252,9 +321,13 @@ local function loadRun()
   R.SetZone(S.zone)
   UI.HideBoss()
   S.achT = 0
-  if S.state == "levelup" then
+  banishMode = false
+  if S.state == "victory" then -- saved on the victory panel: already banked and recorded
+    mode = "victory"
+    UI.Victory(S, { gold = S.banked or 0 })
+  elseif S.state == "levelup" then
     mode = "levelup"
-    UI.LevelUp(S)
+    UI.LevelUp(S, banishMode)
   elseif S.state == "chest" then
     mode = "chest"
     UI.Chest(S)
@@ -304,7 +377,34 @@ end
 
 function ns.Choose(i)
   if mode ~= "levelup" or not S then return end
+  if banishMode then
+    if Sim.Banish(S, i) then banishMode = false; UI.LevelUp(S, banishMode); ns.Sfx("click") end
+    return
+  end
   if Sim.Choose(S, i) then resumePlay() end
+end
+
+-- B on the level-up screen: the next card picked is banished (toggles)
+function ns.BanishMode()
+  if mode ~= "levelup" or not S or (S.banishes or 0) <= 0 then return false end
+  banishMode = not banishMode
+  UI.LevelUp(S, banishMode)
+  return banishMode
+end
+
+-- the victory panel
+function ns.CashOut()
+  if mode ~= "victory" or not S then return false end
+  return Sim.CashOut(S)
+end
+
+function ns.KeepGoing()
+  if mode ~= "victory" or not S then return false end
+  if not Sim.KeepGoing(S) then return false end
+  UI.Banner("Endless! The Scourge grows stronger.", 1, 0.5, 0.25)
+  resumePlay()
+  if S.pendingLevels > 0 or S.chestN > 0 then mode = "play" end -- the next step opens them
+  return true
 end
 
 function ns.Reroll()
@@ -370,6 +470,11 @@ AzerothSurvivorsAPI = {
 -- returns true when the key is ours (not passed on to the game's bindings)
 local function onKey(key, down)
   if down and mode == "levelup" and key == "S" then ns.Skip() return true end
+  if down and mode == "levelup" and key == "B" then ns.BanishMode() return true end
+  if down and mode == "victory" and (key == "C" or key == "E") then
+    if key == "C" then ns.CashOut() else ns.KeepGoing() end
+    return true
+  end
   if down and mode == "title" and key == "ESCAPE" and UI.SubOpen() then UI.ShowSub(nil) return true end
   if MOVE[key] then
     return mode == "play" -- movement is polled with IsKeyDown; outside play the character may walk
@@ -432,7 +537,7 @@ local function onUpdate(_, elapsed)
     if S.achT >= 1 and S.state == "play" then S.achT = 0; ns.CheckAchievements(S, false) end
   end
   local t1 = debugprofilestop()
-  if mode == "play" or mode == "levelup" or mode == "chest" or S.state == "play" then
+  if mode == "play" or mode == "levelup" or mode == "chest" or mode == "victory" or S.state == "play" then
     R.Draw(S, mode == "play" and elapsed or 0)
   end
   local t2 = debugprofilestop()
