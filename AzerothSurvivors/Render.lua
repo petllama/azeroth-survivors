@@ -119,6 +119,14 @@ function R.Init(parent, w, h)
     if not art(t, "potion") then t:SetTexture("Interface\\Icons\\INV_Potion_54") end
     t:SetSize(22, 22)
   end)
+  newPool("coin", "ARTWORK", -1, function(t)
+    if not art(t, "coin") then t:SetTexture("Interface\\Icons\\INV_Misc_Coin_01"); t:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
+    t:SetSize(16, 16)
+  end)
+  newPool("chest", "ARTWORK", 0, function(t)
+    if not art(t, "chest") then t:SetTexture("Interface\\Icons\\INV_Misc_TreasureChest02b"); t:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
+    t:SetSize(36, 36)
+  end)
 
   playerTex = world:CreateTexture(nil, "ARTWORK", nil, 5)
   playerTex:SetSize(52, 52)
@@ -269,7 +277,11 @@ function R.Fx(S, kind, a, b, c, d, e)
     ns.UI.Banner("A swarm of bats closes in!", 0.9, 0.6, 1)
   elseif kind == "boss" then
     ns.UI.Banner("The Frost Lich has come for you!", 0.5, 0.8, 1)
-    ns.PlaySound(8959) -- raid warning
+    ns.Sfx("boss")
+  elseif kind == "evolve" then -- weapon
+    local p = S.p
+    ring(p.x, p.y, 120, a.def.color, 0.6)
+    ring(p.x, p.y, 70, { 1, 1, 1 }, 0.4)
   end
 end
 
@@ -457,7 +469,7 @@ function R.Draw(S, elapsed)
   for i = 1, S.nI do
     local it = S.items[i]
     local t = it.tex
-    if not t then t = acquire(pools[it.kind]); it.tex = t end
+    if not t then t = acquire(pools[it.kind] or pools.potion); it.tex = t end
     place(t, it.x + ox, it.y + oy + sin(now * 4) * 3)
   end
 

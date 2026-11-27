@@ -12,21 +12,52 @@ local CELL = 64
 local MAX_R = 40 -- largest enemy radius (boss); grid queries widen by this
 
 local function noop() end
-local NOHOOKS = { release = noop, number = noop, fx = noop, levelup = noop, hurt = noop, kill = noop, over = noop, pickup = noop, heal = noop }
+local NOHOOKS = { release = noop, number = noop, fx = noop, levelup = noop, hurt = noop, kill = noop, over = noop, pickup = noop, heal = noop,
+  chest = noop, evolve = noop }
 
 function Sim.HpScale(t) return 1 + t / 300 + (t / 550) ^ 2 end
 
+-- plain copy of a flat table of numbers/booleans (meta ranks, curse set)
+local function copyFlat(t)
+  local o = {}
+  if type(t) == "table" then
+    for k, v in pairs(t) do
+      if type(k) == "string" and (type(v) == "number" or type(v) == "boolean") then o[k] = v end
+    end
+  end
+  return o
+end
+
+-- the evolution recipe that made weapon `into`, if any
+local function recipeOf(into)
+  for _, r in ipairs(C.EVOLUTIONS) do if r.into == into then return r end end
+end
+Sim.RecipeOf = recipeOf
+
 ---------------------------------------------------------------------------
 -- setup
+-- opts: class, viewR, hooks, cap, stress, invuln, weapon,
+--   meta    = { might = rank, armor, maxhp, recovery, swift, greed, growth, reroll, skip, insight } (shop ranks)
+--   curses  = { horde = true, brutal = true, haste = true, frail = true }
+--   unlocks = { reroll = n, slot = n } (achievement bonuses)
 ---------------------------------------------------------------------------
 function Sim.New(opts)
   opts = opts or {}
   local P = C.PLAYER
   local cls = C.CLASSES[opts.class or "paladin"] and (opts.class or "paladin") or "paladin"
   local cd = C.CLASSES[cls]
+  local meta, curses, unlocks = copyFlat(opts.meta), copyFlat(opts.curses), copyFlat(opts.unlocks)
+  local xpMul, goldMul = C.CurseMult(curses)
   local S = {
-    class = cls, cdef = cd, impacts = {}, nImp = 0, xpBank = 0,
+    class = cls, cdef = cd, impacts = {}, nImp = 0, xpBank = 0, coinBank = 0,
     t = 0, kills = 0, state = "play", dmgDone = 0,
+    meta = meta, curses = curses, unlocks = unlocks,
+    gold = 0, dmgBy = {}, gotAt = {}, evolved = {}, nEvolved = 0, chestN = 0,
+    xpMul = xpMul * (1 + 0.05 * (meta.growth or 0)), goldMul = goldMul,
+    spawnMul = 1, eHpMul = 1, eSpeedMul = 1,
+    rerolls = (meta.reroll or 0) + (unlocks.reroll or 0), skips = meta.skip or 0,
+    nChoices = (meta.insight or 0) > 0 and 4 or 3,
+    wslots = C.WEAPON_SLOTS + (unlocks.slot or 0),
     viewR = opts.viewR or 600,
     cap = opts.cap or C.MAX_ENEMIES,
     stress = opts.stress, invuln = opts.invuln or opts.stress,
@@ -42,6 +73,25 @@ function Sim.New(opts)
     grid = {}, gridUsed = {}, nUsed = 0, nBuckets = 0, q = {}, q2 = {}, targets = {},
     nextId = 0, castId = 0,
   }
+  -- meta shop ranks
+  local p = S.p
+  p.might = p.might + 0.05 * (meta.might or 0)
+  p.armor = p.armor + (meta.armor or 0)
+  p.maxhp = p.maxhp + cd.hp * 0.10 * (meta.maxhp or 0)
+  p.regen = p.regen + 0.2 * (meta.recovery or 0)
+  p.speed = p.speed + cd.speed * 0.05 * (meta.swift or 0)
+  p.magnet = p.magnet + P.magnet * 0.20 * (meta.greed or 0)
+  -- curses
+  for _, c in ipairs(C.CURSES) do
+    if curses[c.id] then
+      if c.spawn then S.spawnMul = S.spawnMul * c.spawn end
+      if c.hp then S.eHpMul = S.eHpMul * c.hp end
+      if c.speed then S.eSpeedMul = S.eSpeedMul * c.speed end
+      if c.maxhp then p.maxhp = p.maxhp * c.maxhp end
+    end
+  end
+  p.maxhp = floor(p.maxhp + 0.5)
+  p.hp = p.maxhp
   Sim.AddWeapon(S, opts.weapon or cd.start)
   return S
 end
@@ -55,9 +105,44 @@ function Sim.AddWeapon(S, id)
   for k, v in pairs(def.base) do w[k] = v end
   S.weapons[id] = w
   S.wlist[#S.wlist + 1] = w
+  if not S.gotAt[id] then S.gotAt[id] = S.t end
   if def.type == "poison" then S.poison = w end
   if def.reflect or w.reflect then S.thorns = w end
   return w
+end
+
+-- Replace the recipe's weapon by its evolution in the same slot.
+function Sim.Evolve(S, r)
+  local old = S.weapons[r.weapon]
+  local def = C.WEAPONS[r.into]
+  if not old or not def then return nil end
+  local w = { id = r.into, def = def, level = 1, timer = old.timer, angle = old.angle or 0, orbs = {}, pts = {}, npts = 0 }
+  for k, v in pairs(def.base) do w[k] = v end
+  for i = 1, #S.wlist do if S.wlist[i] == old then S.wlist[i] = w end end
+  S.weapons[r.weapon] = nil
+  S.weapons[r.into] = w
+  S.evolved[r.weapon] = r.into
+  S.nEvolved = S.nEvolved + 1
+  if not S.gotAt[r.into] then S.gotAt[r.into] = S.t end
+  if S.poison == old then S.poison = nil end
+  if S.thorns == old then S.thorns = nil end
+  if def.type == "poison" then S.poison = w end
+  if def.reflect or w.reflect then S.thorns = w end
+  S.picks = (S.picks or 0) + 1
+  S.hooks.evolve(S, w, r)
+  return w
+end
+
+-- recipes whose weapon is maxed and whose passive is owned
+function Sim.EligibleEvolutions(S)
+  local out = {}
+  for _, r in ipairs(C.EVOLUTIONS) do
+    local w = S.weapons[r.weapon]
+    if w and not w.def.evolved and w.level >= C.MAX_WEAPON_LEVEL and S.passives[r.passive] and C.WEAPONS[r.into] then
+      out[#out + 1] = r
+    end
+  end
+  return out
 end
 
 function Sim.LevelWeapon(S, id)
@@ -86,16 +171,47 @@ function Sim.AddPassive(S, id)
   elseif d.stat == "area" then p.area = p.area + d.add end
 end
 
--- Three weighted picks without replacement; upgrades of owned things weigh double.
+-- skills a class may take: its kit, then (with a 6th weapon slot unlocked) other classes' skills
+local foreignCache
+local function foreignSkills(S)
+  if not foreignCache then
+    foreignCache = {}
+    local seen = {}
+    for _, cid in ipairs(C.CLASS_ORDER) do
+      local cd = C.CLASSES[cid]
+      for _, id in ipairs(cd and cd.kit or {}) do
+        if not seen[id] and C.WEAPONS[id] and not C.WEAPONS[id].evolved then seen[id] = true; foreignCache[#foreignCache + 1] = id end
+      end
+    end
+  end
+  return foreignCache
+end
+
+-- S.nChoices (3, 4 with Insight) weighted picks without replacement; upgrades of owned things weigh double.
+-- Evolved weapons (and the weapons they replaced) are never offered.
 function Sim.RollChoices(S)
   local pool, wts = {}, {}
   local function add(c, wt) pool[#pool + 1] = c; wts[#wts + 1] = wt end
+  local inKit = {}
   for _, id in ipairs(S.cdef.kit) do
+    inKit[id] = true
     local w = S.weapons[id]
     if w then
       if w.level < C.MAX_WEAPON_LEVEL then add({ kind = "weapon", id = id, level = w.level + 1 }, 2) end
-    elseif #S.wlist < C.WEAPON_SLOTS then
+    elseif not S.evolved[id] and #S.wlist < S.wslots then
       add({ kind = "weapon", id = id, level = 1 }, 1.2)
+    end
+  end
+  if S.wslots > C.WEAPON_SLOTS then
+    for _, id in ipairs(foreignSkills(S)) do
+      if not inKit[id] then
+        local w = S.weapons[id]
+        if w then
+          if w.level < C.MAX_WEAPON_LEVEL then add({ kind = "weapon", id = id, level = w.level + 1 }, 2) end
+        elseif not S.evolved[id] and #S.wlist < S.wslots then
+          add({ kind = "weapon", id = id, level = 1 }, 0.25)
+        end
+      end
     end
   end
   for _, id in ipairs(C.PASSIVE_ORDER) do
@@ -107,7 +223,7 @@ function Sim.RollChoices(S)
     end
   end
   local picks = {}
-  for _ = 1, 3 do
+  for _ = 1, S.nChoices or 3 do
     local total = 0
     for i = 1, #wts do total = total + wts[i] end
     if total <= 0 then break end
@@ -124,31 +240,108 @@ end
 
 function Sim.ChoiceText(c)
   if c.kind == "heal" then return "Healing Potion", "Restore 40 health.", "Interface\\Icons\\INV_Potion_54" end
+  if c.kind == "gold" then return c.amount .. " gold", "A pile of gold for the shop.", "Interface\\Icons\\INV_Misc_Coin_01" end
+  if c.kind == "evolve" then
+    local d, from = C.WEAPONS[c.id], C.WEAPONS[c.from]
+    return d.name, "Evolution! " .. (from and from.name or "?") .. " becomes " .. d.name .. ". " .. d.desc, d.icon
+  end
   if c.kind == "weapon" then
     local d = C.WEAPONS[c.id]
-    local text = c.level == 1 and ("New! " .. d.desc) or (d.levels[c.level].text)
+    local text = c.level == 1 and ("New! " .. d.desc) or (d.levels[c.level] and d.levels[c.level].text or "")
     return d.name .. (c.level > 1 and (" " .. c.level) or ""), text, d.icon
   end
   local d = C.PASSIVES[c.id]
   return d.name .. (c.level > 1 and (" " .. c.level) or ""), (c.level == 1 and "New! " or "") .. d.text, d.icon
 end
 
-function Sim.Choose(S, i)
-  local c = S.choices and S.choices[i]
-  if not c or S.state ~= "levelup" then return false end
+local function apply(S, c)
   if c.kind == "heal" then S.p.hp = min(S.p.maxhp, S.p.hp + 40)
+  elseif c.kind == "gold" then S.gold = S.gold + c.amount
   elseif c.kind == "weapon" then
     if S.weapons[c.id] then Sim.LevelWeapon(S, c.id) else Sim.AddWeapon(S, c.id) end
-  else Sim.AddPassive(S, c.id) end
-  S.choices = nil
+  elseif c.kind == "passive" then Sim.AddPassive(S, c.id) end
   S.picks = (S.picks or 0) + 1
-  S.pendingLevels = S.pendingLevels - 1
+end
+
+-- after a pick / skip / chest: next level-up, or back to play
+local function nextOrPlay(S)
   if S.pendingLevels > 0 then
+    S.state = "levelup"
     Sim.RollChoices(S)
     S.hooks.levelup(S)
   else
     S.state = "play"
   end
+end
+
+function Sim.Choose(S, i)
+  local c = S.choices and S.choices[i]
+  if not c or S.state ~= "levelup" then return false end
+  apply(S, c)
+  S.choices = nil
+  S.pendingLevels = S.pendingLevels - 1
+  nextOrPlay(S)
+  return true
+end
+
+-- R on the level-up screen: new cards, uses one reroll
+function Sim.Reroll(S)
+  if S.state ~= "levelup" or (S.rerolls or 0) <= 0 then return false end
+  S.rerolls = S.rerolls - 1
+  Sim.RollChoices(S)
+  S.hooks.levelup(S)
+  return true
+end
+
+-- S on the level-up screen: take nothing for this level, uses one skip
+function Sim.Skip(S)
+  if S.state ~= "levelup" or (S.skips or 0) <= 0 then return false end
+  S.skips = S.skips - 1
+  S.choices = nil
+  S.pendingLevels = S.pendingLevels - 1
+  nextOrPlay(S)
+  return true
+end
+
+---------------------------------------------------------------------------
+-- chests: picked up -> state "chest"; OpenChest rolls and applies the upgrades; CloseChest resumes
+---------------------------------------------------------------------------
+local function chestReward(S)
+  local evo = Sim.EligibleEvolutions(S)
+  if #evo > 0 then
+    local r = evo[random(#evo)]
+    Sim.Evolve(S, r)
+    return { kind = "evolve", id = r.into, from = r.weapon }
+  end
+  local opts = {}
+  for _, w in ipairs(S.wlist) do
+    if not w.def.evolved and w.level < C.MAX_WEAPON_LEVEL then opts[#opts + 1] = { kind = "weapon", id = w.id, level = w.level + 1 } end
+  end
+  for _, id in ipairs(S.plist) do
+    if S.passives[id] < C.MAX_PASSIVE_LEVEL then opts[#opts + 1] = { kind = "passive", id = id, level = S.passives[id] + 1 } end
+  end
+  local c
+  if #opts > 0 then c = opts[random(#opts)]
+  else c = { kind = "gold", amount = floor(C.CHEST_GOLD * S.goldMul + 0.5) } end
+  apply(S, c)
+  return c
+end
+
+function Sim.OpenChest(S)
+  if S.state ~= "chest" or S.chestN <= 0 then return nil end
+  local list = {}
+  for i = 1, S.chestN do list[i] = chestReward(S) end
+  S.chestN = 0
+  S.chestRewards = list
+  S.chests = (S.chests or 0) + 1
+  return list
+end
+
+function Sim.CloseChest(S)
+  if S.state ~= "chest" then return false end
+  if S.chestN > 0 then Sim.OpenChest(S) end
+  S.chestRewards = nil
+  nextOrPlay(S)
   return true
 end
 
@@ -231,13 +424,14 @@ local function spawnEnemy(S, kind, x, y, force)
   if S.nE >= S.cap and not force then return nil end
   local d = C.ENEMIES[kind]
   local e = tremove(S.enemyPool) or {}
-  local hs = d.boss and 1 or Sim.HpScale(S.t)
+  local hs = (d.boss and 1 or Sim.HpScale(S.t)) * S.eHpMul
   e.kind, e.def, e.x, e.y, e.r = kind, d, x, y, d.r
   e.hp = d.hp * hs; e.maxhp = e.hp
-  e.speed = d.speed * (0.9 + random() * 0.2)
+  e.speed = d.speed * (0.9 + random() * 0.2) * S.eSpeedMul
   e.dmg = d.dmg * (1 + S.t / 600)
   e.slow, e.flash, e.kx, e.ky, e.orbT, e.lastProj, e.chainId = 0, 0, 0, 0, -1, 0, 0
   e.root, e.dot, e.dotT, e.pdps, e.pT, e.dotAcc = 0, 0, 0, 0, 0, 0
+  e.dotSrc, e.pSrc = nil, nil
   e.dead, e.face, e.tex = false, 1, nil
   S.nE = S.nE + 1
   S.enemies[S.nE] = e
@@ -283,11 +477,19 @@ local function dropGem(S, x, y, xp)
   S.gems[S.nG] = g
 end
 
-local function dropItem(S, kind, x, y)
-  local it = { kind = kind, x = x, y = y, dead = false }
+-- items: potion, chest (value = number of upgrades), coin (value = gold before the curse multiplier)
+local function dropItem(S, kind, x, y, value)
+  if kind == "coin" then
+    if S.nI >= C.MAX_ITEMS then S.coinBank = S.coinBank + (value or 1); return end
+    value = (value or 1) + S.coinBank
+    S.coinBank = 0
+  end
+  local it = { kind = kind, x = x, y = y, dead = false, value = value }
   S.nI = S.nI + 1
   S.items[S.nI] = it
+  return it
 end
+Sim.DropItem = dropItem
 
 -- dot/dotDur: apply (refresh) a burn; S.poison adds poison to every direct hit. isDot = tick, no crit/knock.
 local function damage(S, e, amt, kx, ky, dot, dotDur, isDot)
@@ -297,15 +499,17 @@ local function damage(S, e, amt, kx, ky, dot, dotDur, isDot)
   local crit = false
   if not isDot then
     if random() < p.crit then amt = amt * 2; crit = true end
-    if dot and dot * dotDur > e.dot * e.dotT then e.dot, e.dotT = dot, dotDur end
+    if dot and dot * dotDur > e.dot * e.dotT then e.dot, e.dotT, e.dotSrc = dot, dotDur, S.curSrc end
     local pw = S.poison
     if pw then
-      if pw.dps > e.pdps or e.pT < pw.dur then e.pdps, e.pT = pw.dps, pw.dur end
+      if pw.dps > e.pdps or e.pT < pw.dur then e.pdps, e.pT, e.pSrc = pw.dps, pw.dur, pw.id end
     end
   end
   e.hp = e.hp - amt
   e.flash = 0.12
   S.dmgDone = S.dmgDone + amt
+  local src = S.curSrc or "other"
+  S.dmgBy[src] = (S.dmgBy[src] or 0) + amt
   if kx and not e.def.boss then
     local k = e.def.elite and 0.3 or 1
     e.kx, e.ky = e.kx + kx * k, e.ky + ky * k
@@ -314,9 +518,19 @@ local function damage(S, e, amt, kx, ky, dot, dotDur, isDot)
   if e.hp <= 0 then
     e.dead = true
     S.kills = S.kills + 1
-    dropGem(S, e.x, e.y, e.def.xp)
-    if e.def.drop then dropItem(S, e.def.drop, e.x, e.y) end
-    if e == S.boss then S.boss = nil; S.bossKilled = true end
+    local d = e.def
+    dropGem(S, e.x, e.y, d.xp)
+    if d.drop then dropItem(S, d.drop, e.x, e.y) end
+    if d.chest then dropItem(S, "chest", e.x + 14, e.y, d.chest) end
+    if d.coins then
+      for k = 1, d.coins do
+        local a = k * TAU / d.coins
+        dropItem(S, "coin", e.x + cos(a) * 26, e.y + sin(a) * 26, d.coinValue or 1)
+      end
+    elseif random() < C.COIN_CHANCE then
+      dropItem(S, "coin", e.x, e.y, 1)
+    end
+    if e == S.boss then S.boss = nil; S.bossKilled = true; S.bossKilledAt = S.t end
     S.hooks.kill(S, e)
   end
 end
@@ -324,7 +538,7 @@ Sim.Damage = damage
 
 local function addXp(S, xp)
   local p = S.p
-  p.xp = p.xp + xp
+  p.xp = p.xp + xp * S.xpMul
   while p.xp >= p.xpNext do
     p.xp = p.xp - p.xpNext
     p.level = p.level + 1
@@ -339,7 +553,12 @@ local function hurtPlayer(S, e)
   local dmg = max(1, e.dmg - p.armor)
   S.lastHit = e
   p.hp = p.hp - dmg
-  if S.thorns then damage(S, e, S.thorns.reflect) end
+  if S.thorns then
+    local prev = S.curSrc
+    S.curSrc = S.thorns.id
+    damage(S, e, S.thorns.reflect)
+    S.curSrc = prev
+  end
   p.iframes = C.PLAYER.iframes
   S.hooks.hurt(S, dmg)
   if p.hp <= 0 then
@@ -352,7 +571,7 @@ local function spawnProj(S, x, y, vx, vy, w)
   local pr = tremove(S.projPool) or {}
   S.nextId = S.nextId + 1
   pr.id, pr.x, pr.y, pr.vx, pr.vy = S.nextId, x, y, vx, vy
-  pr.dmg, pr.pierce, pr.life, pr.dead, pr.tex, pr.w = w.dmg, w.pierce, w.life, false, nil, w
+  pr.dmg, pr.pierce, pr.life, pr.dead, pr.tex, pr.w, pr.src = w.dmg, w.pierce, w.life, false, nil, w, w.id
   S.nP = S.nP + 1
   S.projs[S.nP] = pr
 end
@@ -561,7 +780,7 @@ function W.strike(S, w, dt)
   for _ = 1, w.count do
     local e = q[random(n)]
     if w.delay > 0 then
-      local imp = { x = e.x, y = e.y, t = w.delay, w = w }
+      local imp = { x = e.x, y = e.y, t = w.delay, w = w, src = w.id }
       S.nImp = S.nImp + 1
       S.impacts[S.nImp] = imp
       S.hooks.fx(S, "fall", e.x, e.y, w.delay, w)
@@ -583,6 +802,7 @@ local function stepImpacts(S, dt)
       local w = imp.w
       local R = w.radius * S.p.area
       local n = query(S, imp.x, imp.y, R, q)
+      S.curSrc = imp.src
       for k = 1, n do damage(S, q[k], w.dmg) end
       S.hooks.fx(S, "impact", imp.x, imp.y, R, w)
     else
@@ -604,8 +824,9 @@ function Sim.Step(S, dt, ix, iy)
   local p = S.p
 
   -- spawning
-  local target = min(S.cap, C.TargetPop(S.t))
-  S.spawnAcc = min(S.spawnAcc + dt * (S.stress and 400 or 25), S.stress and 50 or 6)
+  S.curSrc = nil
+  local target = min(S.cap, C.TargetPop(S.t) * S.spawnMul)
+  S.spawnAcc = min(S.spawnAcc + dt * (S.stress and 400 or 25 * S.spawnMul), S.stress and 50 or 6)
   while S.spawnAcc >= 1 and S.nE < (S.stress and S.cap or target) do
     S.spawnAcc = S.spawnAcc - 1
     local x, y = ringPos(S, S.viewR + 30)
@@ -673,12 +894,22 @@ function Sim.Step(S, dt, ix, iy)
       if e.slow > 0 then e.slow = e.slow - dt end
       if e.root > 0 then e.root = e.root - dt end
       if e.dotT > 0 or e.pT > 0 then -- burns and poison tick twice a second
-        local dps = (e.dotT > 0 and e.dot or 0) + (e.pT > 0 and e.pdps or 0)
+        local bd, pd = (e.dotT > 0 and e.dot or 0), (e.pT > 0 and e.pdps or 0)
         e.dotT, e.pT = e.dotT - dt, e.pT - dt
         e.dotAcc = e.dotAcc + dt
         if e.dotAcc >= 0.5 then
-          damage(S, e, dps * e.dotAcc, nil, nil, nil, nil, true)
+          local acc = e.dotAcc
           e.dotAcc = 0
+          if bd > 0 and pd > 0 and e.dotSrc ~= e.pSrc then -- two sources: two ticks, each credited to its skill
+            S.curSrc = e.dotSrc
+            damage(S, e, bd * acc, nil, nil, nil, nil, true)
+            S.curSrc = e.pSrc
+            damage(S, e, pd * acc, nil, nil, nil, nil, true)
+          else
+            S.curSrc = bd > 0 and e.dotSrc or e.pSrc
+            damage(S, e, (bd + pd) * acc, nil, nil, nil, nil, true)
+          end
+          S.curSrc = nil
         end
       end
       if e.flash > 0 then e.flash = e.flash - dt end
@@ -692,10 +923,12 @@ function Sim.Step(S, dt, ix, iy)
   -- weapons
   for i = 1, #S.wlist do
     local w = S.wlist[i]
+    S.curSrc = w.id
     W[w.def.type](S, w, dt)
   end
-  if S.nImp > 0 then stepImpacts(S, dt)
-  end
+  S.curSrc = nil
+  if S.nImp > 0 then stepImpacts(S, dt) end
+  S.curSrc = nil
 
   -- projectiles
   local P, q = S.projs, S.q2
@@ -711,6 +944,7 @@ function Sim.Step(S, dt, ix, iy)
         local e = q[k]
         if e.lastProj ~= pr.id then
           e.lastProj = pr.id
+          S.curSrc = pr.src
           damage(S, e, pr.dmg, pr.vx * 0.25, pr.vy * 0.25)
           pr.pierce = pr.pierce - 1
           if pr.pierce <= 0 then pr.dead = true; break end
@@ -745,14 +979,26 @@ function Sim.Step(S, dt, ix, iy)
     end
   end
 
-  -- items
+  S.curSrc = nil
+  -- items (coins are pulled in like crystals)
   for i = 1, S.nI do
     local it = S.items[i]
     local dx, dy = p.x - it.x, p.y - it.y
-    if dx * dx + dy * dy < (p.r + 16) ^ 2 then
+    local d2 = dx * dx + dy * dy
+    if d2 < (p.r + 16) ^ 2 then
       it.dead = true
-      if it.kind == "potion" then p.hp = min(p.maxhp, p.hp + p.maxhp * 0.3) end
-      S.hooks.pickup(S, it.kind)
+      if it.kind == "potion" then p.hp = min(p.maxhp, p.hp + p.maxhp * 0.3)
+      elseif it.kind == "coin" then S.gold = S.gold + (it.value or 1) * S.goldMul
+      elseif it.kind == "chest" then S.chestN = S.chestN + (it.value or 1) end
+      S.hooks.pickup(S, it.kind, it)
+    elseif it.kind == "coin" and d2 > lost2 then -- left far behind: banked into the next coin, never lost
+      it.dead = true
+      S.coinBank = S.coinBank + (it.value or 1)
+    elseif it.kind == "coin" and (it.pull or d2 < mag2) then
+      it.pull = true
+      local d = sqrt(d2)
+      local step = min(d, pull)
+      it.x, it.y = it.x + dx / d * step, it.y + dy / d * step
     end
   end
 
@@ -766,7 +1012,10 @@ function Sim.Step(S, dt, ix, iy)
     S.hooks.over(S, true)
     return
   end
-  if S.pendingLevels > 0 then
+  if S.chestN > 0 then
+    S.state = "chest"
+    S.hooks.chest(S)
+  elseif S.pendingLevels > 0 then
     S.state = "levelup"
     Sim.RollChoices(S)
     S.hooks.levelup(S)
@@ -776,18 +1025,24 @@ end
 ---------------------------------------------------------------------------
 -- save / load (plain tables only: they go into SavedVariables)
 ---------------------------------------------------------------------------
-Sim.SAVE_VERSION = 1
+-- v2: gold, dmgBy, gotAt, meta, curses, unlocks, rerolls/skips, chests, evolved weapons, item values.
+-- v1 saves still load (the new fields start empty).
+Sim.SAVE_VERSION = 2
 
 function Sim.Serialize(S)
   local p = S.p
   local d = {
     v = Sim.SAVE_VERSION, class = S.class, t = S.t, kills = S.kills, dmgDone = S.dmgDone,
-    state = S.state == "levelup" and "levelup" or "play",
+    state = (S.state == "levelup" or S.state == "chest") and S.state or "play",
     spawnAcc = S.spawnAcc, nextElite = S.nextElite, nextSwarm = S.nextSwarm,
     bossSpawned = S.bossSpawned or nil, bossKilled = S.bossKilled or nil,
     pendingLevels = S.pendingLevels, xpBank = S.xpBank, picks = S.picks or 0,
     p = { x = p.x, y = p.y, hp = p.hp, xp = p.xp, level = p.level, fx = p.fx, fy = p.fy },
     weapons = {}, passives = {}, enemies = {}, gems = {}, items = {},
+    gold = S.gold, coinBank = S.coinBank, chestN = S.chestN, chests = S.chests,
+    rerolls = S.rerolls, skips = S.skips,
+    meta = copyFlat(S.meta), curses = copyFlat(S.curses), unlocks = copyFlat(S.unlocks),
+    dmgBy = copyFlat(S.dmgBy), gotAt = copyFlat(S.gotAt),
   }
   for i, w in ipairs(S.wlist) do d.weapons[i] = { w.id, w.level, w.timer or 0, w.angle or 0 } end
   for i, id in ipairs(S.plist) do d.passives[i] = { id, S.passives[id] } end
@@ -798,7 +1053,7 @@ function Sim.Serialize(S)
     end
   end
   for i = 1, S.nG do local g = S.gems[i]; if not g.dead then d.gems[#d.gems + 1] = { g.x, g.y, g.xp } end end
-  for i = 1, S.nI do local it = S.items[i]; if not it.dead then d.items[#d.items + 1] = { it.kind, it.x, it.y } end end
+  for i = 1, S.nI do local it = S.items[i]; if not it.dead then d.items[#d.items + 1] = { it.kind, it.x, it.y, it.value } end end
   if S.choices then
     d.choices = {}
     for i, c in ipairs(S.choices) do d.choices[i] = { c.kind, c.id, c.level } end
@@ -808,19 +1063,31 @@ end
 
 -- Rebuild a run from Sim.Serialize data. opts as for Sim.New (hooks, viewR). Returns S or nil, why.
 function Sim.Deserialize(d, opts)
-  if type(d) ~= "table" or d.v ~= Sim.SAVE_VERSION or not C.CLASSES[d.class] then return nil, "unknown save" end
+  if type(d) ~= "table" or type(d.v) ~= "number" or d.v < 1 or d.v > Sim.SAVE_VERSION or not C.CLASSES[d.class] then
+    return nil, "unknown save"
+  end
   opts = opts or {}
   opts.class = d.class
+  -- the run keeps the shop ranks, curses and unlocks it started with
+  opts.meta, opts.curses, opts.unlocks = d.meta, d.curses, d.unlocks
   local S = Sim.New(opts)
   -- weapons in their order, levelled up the same way as in play
-  S.weapons, S.wlist, S.poison, S.thorns = {}, {}, nil, nil
+  S.weapons, S.wlist, S.poison, S.thorns, S.gotAt = {}, {}, nil, nil, {}
   for _, wd in ipairs(d.weapons or {}) do
-    if C.WEAPONS[wd[1]] then
+    local def = C.WEAPONS[wd[1]]
+    if def then
       local w = Sim.AddWeapon(S, wd[1])
       for _ = 2, wd[2] do Sim.LevelWeapon(S, wd[1]) end
       w.timer, w.angle = wd[3], wd[4]
+      local r = def.evolved and recipeOf(wd[1])
+      if r then S.evolved[r.weapon] = wd[1]; S.nEvolved = S.nEvolved + 1 end
     end
   end
+  for k, v in pairs(d.gotAt or {}) do S.gotAt[k] = v end
+  for k, v in pairs(d.dmgBy or {}) do S.dmgBy[k] = v end
+  S.gold, S.coinBank, S.chestN, S.chests = d.gold or 0, d.coinBank or 0, d.chestN or 0, d.chests
+  if d.rerolls then S.rerolls = d.rerolls end
+  if d.skips then S.skips = d.skips end
   for _, pd in ipairs(d.passives or {}) do
     if C.PASSIVES[pd[1]] then for _ = 1, pd[2] do Sim.AddPassive(S, pd[1]) end end
   end
@@ -845,8 +1112,14 @@ function Sim.Deserialize(d, opts)
     S.nG = S.nG + 1
     S.gems[S.nG] = g
   end
-  for _, id in ipairs(d.items or {}) do dropItem(S, id[1], id[2], id[3]) end
-  if d.state == "levelup" and d.choices then
+  for _, id in ipairs(d.items or {}) do
+    local it = { kind = id[1], x = id[2], y = id[3], dead = false, value = id[4] }
+    S.nI = S.nI + 1
+    S.items[S.nI] = it
+  end
+  if d.state == "chest" and S.chestN > 0 then
+    S.state = "chest"
+  elseif d.state == "levelup" and d.choices then
     S.state = "levelup"
     S.choices = {}
     for i, c in ipairs(d.choices) do S.choices[i] = { kind = c[1], id = c[2], level = c[3] } end

@@ -4,14 +4,15 @@ A Vampire Survivors-style arcade game that runs inside WoW: Forever as an addon.
 
 ## Install
 
-Download `AzerothSurvivors-<version>.zip` from [Releases](https://github.com/petllama/azeroth-survivors/releases) and unzip it into `World of Warcraft/_forever_/Interface/AddOns/` so you get `AddOns/AzerothSurvivors/AzerothSurvivors.toc`. A first install needs a full game restart; updates need `/reload`.
+Download `AzerothSurvivors-<version>.zip` from [Releases](https://github.com/petllama/azeroth-survivors/releases) and unzip it into `World of Warcraft/_forever_/Interface/AddOns/` so you get `AddOns/AzerothSurvivors/AzerothSurvivors.toc`. A first install needs a full game restart; updates need `/reload`, except 0.5.0, which adds a file (`Social.lua`): restart the game once.
 
 Built for WoW: Forever (interface 16001, a retail-based client). It uses only plain frames and textures, so it may work on other retail-based clients with the `## Interface` line changed; untested.
 
 ## Play
 
 - `/azs` (or `/survivors`, or the addon compartment button) opens the window. `SPACE` starts a run.
-- `WASD` / arrow keys move. `1` `2` `3` (or click) pick a level-up. `ESC` pauses; `Q` in the pause screen ends the run.
+- `WASD` / arrow keys move. `1` `2` `3` (`4` with Insight) or a click picks a level-up; `R` rerolls the cards and `S` skips the level when you have rerolls / skips (see the Shop). `ESC` pauses; `Q` in the pause screen ends the run.
+- A treasure chest opens with `SPACE` (or `ENTER` / `1` / the button); `SPACE` again reveals the rest and continues.
 - Movement keys are captured only while a run is playing; on the title, pause and game-over screens your character can walk.
 - Entering real combat pauses the game and releases the keyboard (WoW forbids changing keyboard capture in combat).
 
@@ -21,7 +22,7 @@ On the game-over screen `SPACE` replays the same class and `C` returns to class 
 
 **Flights:** like Polestar's Freedoom Arcade. On a flight with a minute or more to go (out of combat, outside instances) a small card asks *Do you want to play Azeroth Survivors while waiting?* (Play, Not now, Don't ask again); after that a *Play Azeroth Survivors* button stays while you fly. When the flight time is known (learned on an earlier landing of that route, or taken from Polestar's own flight recordings), the run is saved, paused and closed ten seconds before landing; on a route with only an estimate (first flight, no Polestar record) it stays open until you actually land. A fight on the way or the landing itself also saves, pauses and closes it, so your keys are yours again. It sits under Polestar's flight timer when that is shown. `/azs flight` turns the offer on or off.
 
-Other commands: `/azs save` / `/azs load`, `/azs flight`, `/azs anim` (movement animations on/off), `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (stress test with 600 enemies, invulnerable), `/azs numbers` (damage numbers on/off), `/azs scale 0.8`, `/azs reset` (window position).
+Other commands: `/azs save` / `/azs load`, `/azs flight`, `/azs sound` (sound effects on/off), `/azs board` (guild leaderboard in chat), `/azs anim` (movement animations on/off), `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (stress test with 600 enemies, invulnerable), `/azs numbers` (damage numbers on/off), `/azs scale 0.8`, `/azs reset` (window position).
 
 ## Classes (0.2.0)
 
@@ -37,11 +38,54 @@ Passives (5 slots, level 5 max): Might, Haste, Sprint, Fortitude, Renew, Greed, 
 
 Enemies: ghouls, bats, wraiths, brutes, an elite death knight every minute (drops a potion), bat swarms every 90 s, the Frost Lich at 8:00. Win at 10:00. Best run is saved per class.
 
+## Chests and evolutions (0.5.0)
+
+Elites drop a treasure chest (1 upgrade) and The Frost Lich drops a big one (3 upgrades). Picking it up pauses the game; open it to reveal the upgrades one after another. An upgrade is a **weapon evolution** when one is ready, otherwise a level of a skill or passive you own, otherwise gold.
+
+A skill evolves when it is at level 6 and you own its passive (any level). Only chests evolve; the evolved skill replaces the old one in the same slot and is never offered on level-up.
+
+| Class | Skill + passive | Evolution |
+|---|---|---|
+| Paladin | Crusader Strike + Might | Templar's Verdict |
+| Paladin | Consecration + Arcane Reach | Hallowed Ground |
+| Paladin | Blessed Hammers + Haste | Hammer of the Righteous |
+| Paladin | Avenger's Shield + Precision | Holy Avenger |
+| Paladin | Divine Storm + Fortitude | Avenging Storm |
+| Rogue | Sinister Strike + Precision | Eviscerate |
+| Rogue | Fan of Knives + Haste | Blade Dance |
+| Rogue | Shuriken Toss + Arcane Reach | Shuriken Storm |
+| Rogue | Blade Flurry + Sprint | Killing Spree |
+| Rogue | Deadly Poison + Might | Deadly Brew |
+| Druid | Wrath + Might | Starsurge |
+| Druid | Moonfire + Renew | Sunfire |
+| Druid | Starfall + Arcane Reach | Celestial Alignment |
+| Druid | Thorns + Devotion | Brambles |
+| Druid | Entangling Roots + Greed | Ursol's Vortex |
+
+## Gold and the Shop
+
+Kills sometimes drop gold coins; elites drop a pile and the boss a lot. Coins fly to you like crystals. Gold from a run (shown under the kill count) is banked when the run ends, also when you quit or die. The **Shop** button on the class screen spends it on permanent upgrades with ranks and rising prices:
+
+Might (+5% damage), Armor (-1 damage taken), Max HP (+10%), Recovery (+0.2 health/sec), Swiftness (+5% speed), Greed (+20% pickup range), Growth (+5% XP), **Reroll** (+1 reroll per run, `R` on the level-up screen), **Skip** (+1 skip per run, `S`), Insight (a 4th card on level-up).
+
+## Curses
+
+The **Curses** button turns on optional, stacking difficulty: Horde (+50% spawn rate), Brutal (+60% enemy health), Haste (+25% enemy speed), Frail (-30% max health). Each active curse gives +25% XP and +50% gold; the class screen shows the current multipliers. Curses stay on until you turn them off.
+
+## Results, achievements and the guild board
+
+- The results screen shows time, level, kills, gold earned and the damage of every skill as bars with its DPS (damage over the time you had the skill).
+- **Achievements** (button on the class screen, a toast when earned): survive 5 and 10 minutes, win with each class, kill the boss, 1000 kills in one run, evolve a weapon, win with 2+ curses, win with every base class. Some unlock things: *survive 10 minutes as a Rogue* gives +1 reroll every run, *evolve a weapon* a 6th weapon slot (level-ups may then offer other classes' skills), *win with every base class* the title Champion of Azeroth on the class screen.
+- **Guild:** when a run ends and you are in a guild, the addon sends one hidden addon message to your guild with class, time, kills, level and win. Guild members with the addon keep the best run per player and class; the **Guild** button lists the top entries and `/azs board` prints them.
+- **Sound:** level-up, chest, evolution, coins, getting hit, the boss, death, victory and achievements play built-in WoW sounds (no files shipped); `/azs sound` turns them off.
+
+Saves from 0.4 still load; a run keeps the shop ranks and curses it started with.
+
 ## Layout
 
-- `AzerothSurvivors/Content.lua` data and balance; `Sim.lua` pure-Lua simulation (no WoW API, spatial grid, pooled entities); `Render.lua` pooled textures/lines/numbers; `UI.lua` HUD and panels; `Main.lua` window, keyboard, loop, slash commands.
+- `AzerothSurvivors/Content.lua` data and balance; `Sim.lua` pure-Lua simulation (no WoW API, spatial grid, pooled entities); `Render.lua` pooled textures/lines/numbers; `UI.lua` HUD, panels (level-up, chest, results, shop, curses, achievements, guild, toast); `Social.lua` guild leaderboard (addon messages); `Main.lua` window, keyboard, loop, sound, achievements, slash commands.
 - `AzerothSurvivors/Art/*.tga` sprites made with the local FLUX model (`tools/art/`, see its README).
-- `CLASS=rogue tests/run_sim.lua [seed] play|stress [cap]` headless run with a bot (`VACUUM=1` = perfect pickup), prints result and ms per step.
+- `CLASS=rogue tests/run_sim.lua [seed] play|stress [cap]` headless run with a bot (`VACUUM=1` = perfect pickup, `META=max` or `META=might:3,armor:1` shop ranks, `CURSES=horde,brutal`), prints result, gold, chests, evolutions, damage share per skill and ms per step.
 - `tests/test_save.lua` save/load round trip for every class.
 - `tests/run_addon.lua [seconds]` loads the whole addon on a mock client and plays: open, start, move, level-ups, pause, combat pause, quit, restart, class select and a run with every class, quick save/load, a mocked flight (card, play, landing guard, learned time, not now, fight, don't ask again), stress.
 - `tools/install.sh` syntax check + offline test, then copies into `_forever_/Interface/AddOns/AzerothSurvivors`. First install (and any new file) needs a full game restart, not `/reload`.

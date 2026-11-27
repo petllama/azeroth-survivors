@@ -6,9 +6,13 @@ ns.UI = UI
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local floor = math.floor
-local hud, xpBar, levelText, timerText, killText, bossBar, bossText, debugText, banner, slots
+local hud, xpBar, levelText, timerText, killText, goldText, bossBar, bossText, debugText, banner, slots
 local panels = {}
 local choiceButtons = {}
+local subs, subOpen = {}, nil
+local toast
+local WEAPON_SLOTS_MAX = C.WEAPON_SLOTS + 1 -- the 6th slot is an achievement unlock
+UI.panels, UI.subs = panels, subs
 
 local function font(parent, size, flags, layer)
   local fs = parent:CreateFontString(nil, layer or "OVERLAY")
@@ -62,6 +66,9 @@ function UI.Init(frame)
   killText = font(hud, 13)
   killText:SetPoint("TOPRIGHT", -10, -18)
   killText:SetTextColor(0.9, 0.9, 0.9)
+  goldText = font(hud, 12)
+  goldText:SetPoint("TOPRIGHT", killText, "BOTTOMRIGHT", 0, -4)
+  goldText:SetTextColor(1, 0.82, 0)
 
   bossBar = bar(hud, 0.4, 0.7, 1)
   bossBar:SetSize(420, 14)
@@ -71,11 +78,11 @@ function UI.Init(frame)
   bossBar:Hide()
 
   slots = {}
-  for i = 1, C.WEAPON_SLOTS + C.PASSIVE_SLOTS do
+  for i = 1, WEAPON_SLOTS_MAX + C.PASSIVE_SLOTS do
     local f = CreateFrame("Frame", nil, hud)
     f:SetSize(24, 24)
-    local row = i <= C.WEAPON_SLOTS and 0 or 1
-    local col = i <= C.WEAPON_SLOTS and i - 1 or i - C.WEAPON_SLOTS - 1
+    local row = i <= WEAPON_SLOTS_MAX and 0 or 1
+    local col = i <= WEAPON_SLOTS_MAX and i - 1 or i - WEAPON_SLOTS_MAX - 1
     f:SetPoint("TOPLEFT", 8 + col * 27, -18 - row * 27)
     f.icon = f:CreateTexture(nil, "ARTWORK")
     f.icon:SetAllPoints()
@@ -160,17 +167,42 @@ function UI.Init(frame)
   local go = font(t, 16)
   go:SetPoint("TOP", sub, "BOTTOM", 0, -300)
   go:SetText("Press |cffffd1001|r |cffffd1002|r |cffffd1003|r or click a class.  |cff00ff00SPACE|r plays the highlighted one.")
+  t.champion = font(t, 13)
+  t.champion:SetPoint("TOP", 0, -14)
+  t.champion:SetTextColor(1, 0.5, 0.15)
+  t.info = font(t, 13)
+  t.info:SetPoint("BOTTOM", 0, 52)
+  t.info:SetWidth(900)
+  local tabs = { { "shop", "Shop" }, { "curses", "Curses" }, { "ach", "Achievements" }, { "guild", "Guild" } }
+  t.tabs = {}
+  for i, tb in ipairs(tabs) do
+    local b = CreateFrame("Button", nil, t, "UIPanelButtonTemplate")
+    b:SetSize(140, 26)
+    b:SetPoint("BOTTOM", (i - 2.5) * 152, 16)
+    b:SetText(tb[2])
+    b:SetScript("OnClick", function() UI.ShowSub(subOpen ~= tb[1] and tb[1] or nil) end)
+    t.tabs[tb[1]] = b
+  end
+  UI.InitSubs(t)
 
   -- level up
   local l = panel("levelup", frame)
   local lt = font(l, 30)
-  lt:SetPoint("CENTER", 0, 170)
+  lt:SetPoint("CENTER", 0, 215)
   lt:SetText("Level Up!")
   lt:SetTextColor(1, 0.82, 0)
-  for i = 1, 3 do
+  l.reroll = CreateFrame("Button", nil, l, "UIPanelButtonTemplate")
+  l.reroll:SetSize(170, 26)
+  l.reroll:SetPoint("CENTER", -95, -262)
+  l.reroll:SetScript("OnClick", function() ns.Reroll() end)
+  l.skip = CreateFrame("Button", nil, l, "UIPanelButtonTemplate")
+  l.skip:SetSize(170, 26)
+  l.skip:SetPoint("CENTER", 95, -262)
+  l.skip:SetScript("OnClick", function() ns.Skip() end)
+  for i = 1, 4 do
     local b = CreateFrame("Button", nil, l)
     b:SetSize(460, 76)
-    b:SetPoint("CENTER", 0, 100 - i * 86)
+    b:SetPoint("CENTER", 0, 150 - i * 84)
     local bg = b:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
     bg:SetColorTexture(0.12, 0.1, 0.16, 0.95)
@@ -206,19 +238,139 @@ function UI.Init(frame)
   pz.sub = font(pz, 14)
   pz.sub:SetPoint("TOP", pz.title, "BOTTOM", 0, -16)
 
-  -- game over
+  -- results (game over)
   local o = panel("over", frame)
-  o.title = font(o, 40)
-  o.title:SetPoint("CENTER", 0, 90)
+  o.title = font(o, 34)
+  o.title:SetPoint("TOP", 0, -30)
   o.stats = font(o, 15)
-  o.stats:SetPoint("TOP", o.title, "BOTTOM", 0, -20)
-  o.stats:SetWidth(520)
+  o.stats:SetPoint("TOP", 0, -122)
+  o.stats:SetWidth(760)
+  o.dmgHead = font(o, 13)
+  o.dmgHead:SetPoint("TOP", 0, -196)
+  o.dmgHead:SetText("Damage by skill")
+  o.dmgHead:SetTextColor(1, 0.82, 0)
+  o.rows = {}
+  for i = 1, 9 do
+    local r = CreateFrame("Frame", nil, o)
+    r:SetSize(620, 22)
+    r:SetPoint("TOP", 0, -216 - (i - 1) * 26)
+    r.icon = r:CreateTexture(nil, "ARTWORK")
+    r.icon:SetSize(20, 20)
+    r.icon:SetPoint("LEFT", 0, 0)
+    r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    r.name = font(r, 12, "")
+    r.name:SetPoint("LEFT", 26, 0)
+    r.name:SetWidth(170)
+    r.name:SetJustifyH("LEFT")
+    r.bar = bar(r, 1, 0.7, 0.2)
+    r.bar:SetPoint("LEFT", 200, 0)
+    r.bar:SetSize(250, 14)
+    r.val = font(r, 12, "")
+    r.val:SetPoint("LEFT", 458, 0)
+    r.val:SetWidth(162)
+    r.val:SetJustifyH("LEFT")
+    r:Hide()
+    o.rows[i] = r
+  end
+  o.ach = font(o, 13)
+  o.ach:SetPoint("TOP", 0, -456)
+  o.ach:SetWidth(760)
   local again = font(o, 16)
-  again:SetPoint("TOP", o.stats, "BOTTOM", 0, -28)
+  again:SetPoint("BOTTOM", 0, 30)
   again:SetText("|cff00ff00SPACE|r play again     |cffffd100C|r change class     |cffffd100ESC|r close")
+
+  -- chest
+  local ch = panel("chest", frame)
+  ch.title = font(ch, 30)
+  ch.title:SetPoint("CENTER", 0, 215)
+  ch.title:SetText("Treasure Chest!")
+  ch.title:SetTextColor(1, 0.82, 0)
+  ch.icon = ch:CreateTexture(nil, "ARTWORK")
+  ch.icon:SetSize(96, 96)
+  ch.icon:SetPoint("CENTER", 0, 120)
+  ch.open = CreateFrame("Button", nil, ch, "UIPanelButtonTemplate")
+  ch.open:SetSize(200, 28)
+  ch.open:SetPoint("CENTER", 0, -262)
+  ch.open:SetScript("OnClick", function() ns.ChestAction() end)
+  ch.cards = {}
+  for i = 1, 3 do
+    local b = CreateFrame("Frame", nil, ch)
+    b:SetSize(460, 70)
+    b:SetPoint("CENTER", 0, 30 - (i - 1) * 80)
+    local bg = b:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0.12, 0.1, 0.16, 0.95)
+    b.edge = b:CreateTexture(nil, "BACKGROUND", nil, -1)
+    b.edge:SetPoint("TOPLEFT", -2, 2)
+    b.edge:SetPoint("BOTTOMRIGHT", 2, -2)
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetSize(50, 50)
+    b.icon:SetPoint("LEFT", 10, 0)
+    b.name = font(b, 15)
+    b.name:SetPoint("TOPLEFT", b.icon, "TOPRIGHT", 12, -2)
+    b.name:SetTextColor(1, 0.82, 0)
+    b.desc = font(b, 12, "")
+    b.desc:SetPoint("TOPLEFT", b.name, "BOTTOMLEFT", 0, -6)
+    b.desc:SetWidth(370)
+    b.desc:SetJustifyH("LEFT")
+    b:Hide()
+    ch.cards[i] = b
+  end
+  ch:SetScript("OnUpdate", function(self, elapsed) UI.ChestTick(elapsed) end)
+
+  -- achievement toast (above every panel)
+  toast = CreateFrame("Frame", nil, frame)
+  toast:SetSize(320, 84)
+  toast:SetPoint("TOP", 0, -80)
+  toast:SetFrameLevel(frame:GetFrameLevel() + 40)
+  local tbg = toast:CreateTexture(nil, "BACKGROUND")
+  tbg:SetAllPoints()
+  local atlasOk = C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo("ui-achievement-alert-background")
+  if atlasOk and tbg.SetAtlas then
+    tbg:SetAtlas("ui-achievement-alert-background")
+  else -- fallback: dark plate with a gold edge
+    tbg:SetColorTexture(0.08, 0.07, 0.05, 0.95)
+    local edge = toast:CreateTexture(nil, "BACKGROUND", nil, -1)
+    edge:SetPoint("TOPLEFT", -2, 2)
+    edge:SetPoint("BOTTOMRIGHT", 2, -2)
+    edge:SetColorTexture(0.85, 0.65, 0.2, 1)
+  end
+  toast.icon = toast:CreateTexture(nil, "ARTWORK")
+  toast.icon:SetSize(44, 44)
+  toast.icon:SetPoint("LEFT", 18, 0)
+  toast.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  local iconFrame = C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo("ui-achievement-iconframe")
+  if iconFrame then
+    local ov = toast:CreateTexture(nil, "OVERLAY")
+    ov:SetSize(62, 62)
+    ov:SetPoint("CENTER", toast.icon, "CENTER", -1, 2)
+    ov:SetAtlas("ui-achievement-iconframe")
+  end
+  toast.head = font(toast, 11)
+  toast.head:SetPoint("TOP", 26, -12)
+  toast.head:SetText("Achievement Earned")
+  toast.head:SetTextColor(1, 0.82, 0)
+  toast.name = font(toast, 15)
+  toast.name:SetPoint("TOP", toast.head, "BOTTOM", 0, -5)
+  toast.name:SetWidth(230)
+  toast.sub = font(toast, 10, "")
+  toast.sub:SetPoint("TOP", toast.name, "BOTTOM", 0, -4)
+  toast.sub:SetWidth(230)
+  toast.queue, toast.t = {}, 0
+  toast:Hide()
+  toast:SetScript("OnUpdate", function(self, elapsed)
+    self.t = self.t - elapsed
+    self:SetAlpha(math.min(1, self.t / 0.5))
+    if self.t <= 0 then
+      self:Hide()
+      UI.NextToast()
+    end
+  end)
+  UI.toast = toast
 end
 
 function UI.Show(name)
+  if name ~= "title" and subOpen then UI.ShowSub(nil) end
   for n, p in pairs(panels) do
     if n == name then p:Show() else p:Hide() end
   end
@@ -226,7 +378,15 @@ end
 
 function UI.Showing(name) return panels[name] and panels[name]:IsShown() end
 
+local function hex(c) return string.format("%02x%02x%02x", c[1] * 255, c[2] * 255, c[3] * 255) end
+
 function UI.TitleBest(db, selected)
+  local t = panels.title
+  local xpM, goldM, n = C.CurseMult(db.curses)
+  t.info:SetText(string.format("|cffffd100%d gold|r banked     Curses: %s", db.gold or 0,
+    n > 0 and string.format("|cffff6060%d active|r  (XP x%.2f, gold x%.2f)", n, xpM, goldM) or "none"))
+  if C.UnlockBonus(db.ach).title then t.champion:SetText(C.TITLE); t.champion:Show() else t.champion:Hide() end
+  if subOpen then UI.RefreshSub() end
   local name, t, level = ns.SaveInfo()
   if name then
     panels.title.cont:SetText(string.format("Continue saved %s run (%s, level %d)   F9", name, fmtTime(t), level))
@@ -242,7 +402,12 @@ function UI.TitleBest(db, selected)
 end
 
 function UI.LevelUp(S)
-  for i = 1, 3 do
+  local l = panels.levelup
+  l.reroll:SetText(string.format("Reroll (R)  %d left", S.rerolls or 0))
+  l.skip:SetText(string.format("Skip (S)  %d left", S.skips or 0))
+  if (S.rerolls or 0) > 0 then l.reroll:Enable() else l.reroll:Disable() end
+  if (S.skips or 0) > 0 then l.skip:Enable() else l.skip:Disable() end
+  for i = 1, 4 do
     local b, c = choiceButtons[i], S.choices[i]
     if c then
       local name, text, icon = Sim.ChoiceText(c)
@@ -263,16 +428,44 @@ function UI.Pause(reason)
   UI.Show("pause")
 end
 
-function UI.Over(S, won, newBest)
+-- results: time, level, kills, gold, damage per skill with DPS, new achievements
+function UI.Over(S, won, res)
+  res = res or {}
   local o = panels.over
   local cd = C.CLASSES[S.class]
-  o.title:SetText((won and "Victory!" or "You have fallen") .. "\n|cff" .. string.format("%02x%02x%02x", cd.color[1] * 255, cd.color[2] * 255, cd.color[3] * 255) .. cd.name .. "|r")
+  o.title:SetText((won and "Victory!" or "You have fallen") .. "\n|cff" .. hex(cd.color) .. cd.name .. "|r")
   o.title:SetTextColor(won and 0.3 or 1, won and 1 or 0.25, won and 0.3 or 0.25)
-  local w = {}
-  for _, x in ipairs(S.wlist) do w[#w + 1] = C.WEAPONS[x.id].name .. " " .. x.level end
-  o.stats:SetText(string.format("Survived %s   Level %d   Kills %d\nDamage dealt %d\n\n%s%s",
-    fmtTime(S.t), S.p.level, S.kills, floor(S.dmgDone), table.concat(w, ", "),
-    newBest and "\n\n|cffffd100New best run!|r" or ""))
+  local _, _, nc = C.CurseMult(S.curses)
+  o.stats:SetText(string.format("Survived %s   Level %d   Kills %d   Damage %d\n|cffffd100+%d gold|r (%d banked)%s%s",
+    fmtTime(S.t), S.p.level, S.kills, floor(S.dmgDone), res.gold or 0, ns.db and ns.db.gold or 0,
+    nc > 0 and string.format("   |cffff6060%d curse%s|r", nc, nc > 1 and "s" or "") or "",
+    res.newBest and "   |cffffd100New best run!|r" or ""))
+  -- damage bars, biggest first
+  local list = {}
+  for id, amt in pairs(S.dmgBy or {}) do if amt >= 1 then list[#list + 1] = { id = id, amt = amt } end end
+  table.sort(list, function(a, b) return a.amt > b.amt end)
+  local top = list[1] and list[1].amt or 1
+  for i, r in ipairs(o.rows) do
+    local e = list[i]
+    if e then
+      local d = C.WEAPONS[e.id]
+      r.icon:SetTexture(d and d.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+      r.name:SetText(d and ((d.evolved and "|cffffd100" or "") .. d.name .. (d.evolved and "|r" or "")) or "Other")
+      local col = d and d.color or { 0.7, 0.7, 0.7 }
+      r.bar:SetStatusBarColor(col[1], col[2], col[3])
+      r.bar:SetMinMaxValues(0, top)
+      r.bar:SetValue(e.amt)
+      local since = S.gotAt and S.gotAt[e.id] or 0
+      r.val:SetText(string.format("%d  (%.0f dps)", floor(e.amt), e.amt / math.max(1, S.t - since)))
+      r:Show()
+    else
+      r:Hide()
+    end
+  end
+  o.dmgHead:SetShown(#list > 0)
+  local names = {}
+  for _, a in ipairs(res.ach or {}) do names[#names + 1] = a.name end
+  o.ach:SetText(#names > 0 and ("Achievements earned: |cffffd100" .. table.concat(names, ", ") .. "|r") or "")
   UI.Show("over")
 end
 
@@ -292,6 +485,8 @@ function UI.Update(S, elapsed, dbg)
   local sec = floor(S.t)
   if sec ~= hud.sec then hud.sec = sec; timerText:SetText(fmtTime(sec)) end
   if S.kills ~= hud.k then hud.k = S.kills; killText:SetText(S.kills .. " kills") end
+  local g = floor(S.gold or 0)
+  if g ~= hud.g then hud.g = g; goldText:SetText(g .. " gold") end
   if S.boss then
     bossBar:SetMinMaxValues(0, S.boss.maxhp)
     bossBar:SetValue(S.boss.hp)
@@ -319,8 +514,8 @@ function UI.Slots(S)
     i = i + 1
     slots[i].icon:SetTexture(w.def.icon); slots[i].lv:SetText(w.level); slots[i]:Show()
   end
-  for k = i + 1, C.WEAPON_SLOTS do slots[k]:Hide() end
-  i = C.WEAPON_SLOTS
+  for k = i + 1, WEAPON_SLOTS_MAX do slots[k]:Hide() end
+  i = WEAPON_SLOTS_MAX
   for _, id in ipairs(S.plist) do
     i = i + 1
     slots[i].icon:SetTexture(C.PASSIVES[id].icon); slots[i].lv:SetText(S.passives[id]); slots[i]:Show()
@@ -328,4 +523,257 @@ function UI.Slots(S)
   for k = i + 1, #slots do slots[k]:Hide() end
 end
 
-function UI.HideBoss() bossBar:Hide(); banner:Hide(); banner.t = 0; hud.lv, hud.sec, hud.k, hud.sig = nil, nil, nil, nil end
+function UI.HideBoss() bossBar:Hide(); banner:Hide(); banner.t = 0; hud.lv, hud.sec, hud.k, hud.sig, hud.g = nil, nil, nil, nil, nil end
+
+
+---------------------------------------------------------------------------
+-- chest screen
+---------------------------------------------------------------------------
+local REVEAL = 0.45
+local chestList, chestShown, chestT = nil, 0, 0
+
+function UI.Chest(S)
+  local ch = panels.chest
+  if ns.Render.USE_ART and ch.icon:SetTexture("Interface\\AddOns\\AzerothSurvivors\\Art\\chest") then
+    ch.icon:SetTexCoord(0, 1, 0, 1)
+  else
+    ch.icon:SetTexture("Interface\\Icons\\INV_Misc_TreasureChest02b")
+    ch.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  end
+  ch.title:SetText(S.chestN > 1 and ("Treasure Chest!  " .. S.chestN .. " upgrades") or "Treasure Chest!")
+  for _, c in ipairs(ch.cards) do c:Hide() end
+  ch.open:SetText("Open (SPACE)")
+  chestList, chestShown, chestT = nil, 0, 0
+  UI.Show("chest")
+end
+
+local function showCard(i)
+  local ch, c = panels.chest, chestList[i]
+  local b = ch.cards[i]
+  if not b or not c then return end
+  local name, text, icon = Sim.ChoiceText(c)
+  b.name:SetText(name)
+  b.desc:SetText(text)
+  b.icon:SetTexture(icon)
+  if c.kind == "evolve" then b.edge:SetColorTexture(1, 0.5, 0.1, 1) else b.edge:SetColorTexture(0.75, 0.6, 0.2, 0.9) end
+  b:Show()
+end
+
+function UI.ChestOpened(S, list)
+  chestList, chestShown, chestT = list or {}, 0, 0
+  if #chestList > 0 then chestShown = 1; showCard(1) end
+  panels.chest.open:SetText(chestShown >= #chestList and "Continue (SPACE)" or "Reveal all (SPACE)")
+end
+
+function UI.ChestTick(elapsed)
+  if not chestList or chestShown >= #chestList then return end
+  chestT = chestT + elapsed
+  if chestT >= REVEAL then
+    chestT = 0
+    chestShown = chestShown + 1
+    showCard(chestShown)
+    if chestShown >= #chestList then panels.chest.open:SetText("Continue (SPACE)") end
+  end
+end
+
+-- true when cards were still hidden (they are shown now)
+function UI.ChestRevealAll()
+  if not chestList or chestShown >= #chestList then return false end
+  while chestShown < #chestList do chestShown = chestShown + 1; showCard(chestShown) end
+  panels.chest.open:SetText("Continue (SPACE)")
+  return true
+end
+
+---------------------------------------------------------------------------
+-- achievement toast
+---------------------------------------------------------------------------
+function UI.Toast(a)
+  toast.queue[#toast.queue + 1] = a
+  if not toast:IsShown() then UI.NextToast() end
+end
+
+function UI.NextToast()
+  local a = table.remove(toast.queue, 1)
+  if not a then return end
+  toast.icon:SetTexture(a.icon)
+  toast.name:SetText(a.name)
+  toast.sub:SetText(a.unlockText or a.desc)
+  toast.t = 4
+  toast.shownId = a.id
+  toast:SetAlpha(1)
+  toast:Show()
+end
+
+---------------------------------------------------------------------------
+-- class screen sub panels: shop, curses, achievements, guild
+---------------------------------------------------------------------------
+local function subPanel(t, name, title)
+  local p = CreateFrame("Frame", nil, t)
+  p:SetSize(660, 540)
+  p:SetPoint("TOP", 0, -64)
+  p:SetFrameLevel(t:GetFrameLevel() + 10)
+  p:EnableMouse(true)
+  local bg = p:CreateTexture(nil, "BACKGROUND")
+  bg:SetAllPoints()
+  bg:SetColorTexture(0.06, 0.05, 0.08, 0.98)
+  local edge = p:CreateTexture(nil, "BACKGROUND", nil, -1)
+  edge:SetPoint("TOPLEFT", -2, 2)
+  edge:SetPoint("BOTTOMRIGHT", 2, -2)
+  edge:SetColorTexture(0.75, 0.6, 0.2, 1)
+  p.title = font(p, 20)
+  p.title:SetPoint("TOP", 0, -12)
+  p.title:SetText(title)
+  p.title:SetTextColor(1, 0.82, 0)
+  p.head = font(p, 12, "")
+  p.head:SetPoint("TOP", 0, -40)
+  p.head:SetWidth(620)
+  local back = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+  back:SetSize(110, 22)
+  back:SetPoint("BOTTOM", 0, 10)
+  back:SetText("Back (ESC)")
+  back:SetScript("OnClick", function() UI.ShowSub(nil) end)
+  p.rows = {}
+  p:Hide()
+  subs[name] = p
+  return p
+end
+
+local function row(p, i, h, top)
+  local r = CreateFrame("Frame", nil, p)
+  r:SetSize(620, h - 4)
+  r:SetPoint("TOP", 0, -(top or 62) - (i - 1) * h)
+  r.icon = r:CreateTexture(nil, "ARTWORK")
+  r.icon:SetSize(h - 10, h - 10)
+  r.icon:SetPoint("LEFT", 4, 0)
+  r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  r.name = font(r, 13)
+  r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 10, 0)
+  r.name:SetWidth(330)
+  r.name:SetJustifyH("LEFT")
+  r.desc = font(r, 11, "")
+  r.desc:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -3)
+  r.desc:SetWidth(400)
+  r.desc:SetJustifyH("LEFT")
+  p.rows[i] = r
+  return r
+end
+
+function UI.InitSubs(t)
+  -- shop
+  local sp = subPanel(t, "shop", "Shop")
+  for i, item in ipairs(C.SHOP) do
+    local r = row(sp, i, 44)
+    r.icon:SetTexture(item.icon)
+    r.buy = CreateFrame("Button", nil, r, "UIPanelButtonTemplate")
+    r.buy:SetSize(130, 24)
+    r.buy:SetPoint("RIGHT", -4, 0)
+    r.buy:SetScript("OnClick", function()
+      if ns.Buy(item.id) then UI.TitleBest(ns.db, ns.db.class) end
+    end)
+    r.id = item.id
+  end
+  -- curses
+  local cp = subPanel(t, "curses", "Curses")
+  for i, c in ipairs(C.CURSES) do
+    local r = row(cp, i, 60, 80)
+    r.icon:SetTexture(c.icon)
+    r.check = CreateFrame("CheckButton", nil, r, "UICheckButtonTemplate")
+    r.check:SetSize(30, 30)
+    r.check:SetPoint("RIGHT", -10, 0)
+    r.check:SetScript("OnClick", function(self)
+      self:SetChecked(ns.ToggleCurse(c.id))
+      UI.TitleBest(ns.db, ns.db.class)
+    end)
+    r.id = c.id
+  end
+  cp.mult = font(cp, 15)
+  cp.mult:SetPoint("TOP", 0, -340)
+  -- achievements
+  local ap = subPanel(t, "ach", "Achievements")
+  for i, a in ipairs(C.ACHIEVEMENTS) do
+    local r = row(ap, i, 40)
+    r.desc:SetWidth(560)
+    r.icon:SetTexture(a.icon)
+    r.id = a.id
+  end
+  -- guild
+  local gp = subPanel(t, "guild", "Guild leaderboard")
+  gp.lines = {}
+  for i = 1, 14 do
+    local l = font(gp, 13, "")
+    l:SetPoint("TOPLEFT", 40, -66 - (i - 1) * 28)
+    l:SetWidth(580)
+    l:SetJustifyH("LEFT")
+    gp.lines[i] = l
+  end
+end
+
+function UI.SubOpen() return subOpen end
+
+function UI.ShowSub(name)
+  subOpen = subs[name] and name or nil
+  for n, p in pairs(subs) do if n == subOpen then p:Show() else p:Hide() end end
+  if subOpen then UI.RefreshSub() end
+end
+
+function UI.RefreshSub()
+  local db = ns.db
+  local p = subs[subOpen]
+  if not p or not db then return end
+  if subOpen == "shop" then
+    p.head:SetText(string.format("|cffffd100%d gold|r to spend. Upgrades apply to every run from the next one on.", db.gold or 0))
+    for _, r in ipairs(p.rows) do
+      local item = C.SHOP_BY_ID[r.id]
+      local rank = db.meta[r.id] or 0
+      r.name:SetText(string.format("%s  |cffaaaaaa%d / %d|r", item.name, rank, item.max))
+      r.desc:SetText(item.text .. " per rank")
+      local cost = C.ShopCost(r.id, rank)
+      if cost then
+        r.buy:SetText(cost .. " gold")
+        if (db.gold or 0) >= cost then r.buy:Enable() else r.buy:Disable() end
+      else
+        r.buy:SetText("Max")
+        r.buy:Disable()
+      end
+    end
+  elseif subOpen == "curses" then
+    p.head:SetText("Curses make every run harder and stack. Each active curse gives +25% XP and +50% gold.")
+    for _, r in ipairs(p.rows) do
+      local c
+      for _, x in ipairs(C.CURSES) do if x.id == r.id then c = x end end
+      r.name:SetText(c.name)
+      r.desc:SetText(c.text)
+      r.check:SetChecked(db.curses[r.id] and true or false)
+    end
+    local xpM, goldM, n = C.CurseMult(db.curses)
+    p.mult:SetText(string.format("%d active:  XP x%.2f   gold x%.2f", n, xpM, goldM))
+  elseif subOpen == "ach" then
+    local got, total = 0, #C.ACHIEVEMENTS
+    for _, r in ipairs(p.rows) do
+      local a
+      for _, x in ipairs(C.ACHIEVEMENTS) do if x.id == r.id then a = x end end
+      local have = db.ach[r.id] and true or false
+      if have then got = got + 1 end
+      r.name:SetText(have and ("|cffffd100" .. a.name .. "|r") or ("|cff888888" .. a.name .. "|r"))
+      r.desc:SetText(a.desc .. (a.unlockText and ("  |cff66ccff" .. a.unlockText .. "|r") or ""))
+      r.icon:SetDesaturated(not have)
+      r.icon:SetAlpha(have and 1 or 0.5)
+    end
+    p.head:SetText(string.format("%d / %d earned", got, total))
+  elseif subOpen == "guild" then
+    local list = ns.Social.Board(#p.lines)
+    p.head:SetText((IsInGuild and IsInGuild()) and "Best run per player and class, shared with guild members who have the addon. /azs board prints it."
+      or "Join a guild to share runs. Your own bests are listed here.")
+    for i, l in ipairs(p.lines) do
+      local r = list[i]
+      if r then
+        local cd = C.CLASSES[r.class]
+        l:SetText(string.format("%2d.  %s   |cff%s%s|r   %s   level %d   %d kills%s", i, r.name,
+          cd and hex(cd.color) or "cccccc", ns.Social.ClassName(r.class), fmtTime(r.t), r.level, r.kills,
+          r.won and "   |cff00ff00victory|r" or ""))
+      else
+        l:SetText(i == 1 and "|cff888888No results yet.|r" or "")
+      end
+    end
+  end
+end
