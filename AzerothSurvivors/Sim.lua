@@ -16,9 +16,15 @@ local function noop() end
 local NOHOOKS = { release = noop, number = noop, fx = noop, levelup = noop, hurt = noop, kill = noop, over = noop, pickup = noop, heal = noop,
   chest = noop, evolve = noop, revive = noop, victory = function(S) Sim.CashOut(S) end }
 
+-- slows last half as long on elites and bosses
+function Sim.Slow(e, sl)
+  if e.def.elite or e.def.boss then sl = sl * 0.5 end
+  if e.slow < sl then e.slow = sl end
+end
+
 -- enemy health over time; past 10:00 (Endless) it climbs faster
 function Sim.HpScale(t)
-  local h = 1 + t / 300 + (t / 550) ^ 2
+  local h = 1 + t / 300 + (t / 430) ^ 2
   if t > C.RUN_SECONDS then
     local d = t - C.RUN_SECONDS
     h = h * (1 + d / C.ENDLESS.hpRamp + (d / C.ENDLESS.hpRamp2) ^ 2)
@@ -98,7 +104,7 @@ function Sim.New(opts)
   p.speed = p.speed + cd.speed * 0.05 * (meta.swift or 0)
   p.magnet = p.magnet + P.magnet * 0.20 * (meta.greed or 0) + P.magnet * 0.10 * (meta.magnet or 0)
   p.haste = p.haste * 0.97 ^ (meta.cooldown or 0)
-  p.area = p.area + 0.05 * (meta.area or 0)
+  p.area = math.min(C.AREA_CAP, p.area + 0.05 * (meta.area or 0))
   -- curses
   for _, c in ipairs(C.CURSES) do
     if curses[c.id] then
@@ -187,7 +193,7 @@ function Sim.AddPassive(S, id)
   elseif d.stat == "regen" then p.regen = p.regen + d.add
   elseif d.stat == "magnet" then p.magnet = p.magnet + C.PLAYER.magnet * d.mulAdd
   elseif d.stat == "armor" then p.armor = p.armor + d.add
-  elseif d.stat == "area" then p.area = p.area + d.add end
+  elseif d.stat == "area" then p.area = math.min(C.AREA_CAP, p.area + d.add) end
 end
 
 -- a skill's effective count: its own, +1 per shop Amount (any skill with a count), +1 per Limit Break Amount
@@ -209,7 +215,7 @@ function Sim.AddLimit(S, id)
   elseif id == "maxhp" then p.maxhp = p.maxhp + 10; p.hp = p.hp + 10
   elseif id == "crit" then p.crit = p.crit + 0.02
   elseif id == "haste" then p.haste = math.max(C.LIMIT_HASTE_FLOOR, p.haste * 0.98)
-  elseif id == "area" then p.area = p.area + 0.05
+  elseif id == "area" then p.area = math.min(C.AREA_CAP, p.area + 0.05)
   elseif id == "speed" then p.speed = p.speed + S.cdef.speed * 0.04
   elseif id == "magnet" then p.magnet = p.magnet + P.magnet * 0.05 end
 end
@@ -222,6 +228,7 @@ local function limitOffers(S)
     local ok = not l.cap or n < l.cap
     if l.id == "haste" and S.p.haste * 0.98 < C.LIMIT_HASTE_FLOOR then ok = false end
     if l.id == "crit" and S.p.crit >= 1 then ok = false end
+    if l.id == "area" and S.p.area >= C.AREA_CAP then ok = false end
     if l.every and S.lbPicks - (S.lbAmtAt or 0) < l.every - 1 then ok = false end
     if ok then out[#out + 1] = l.id end
   end
@@ -533,6 +540,7 @@ local function spawnEnemy(S, kind, x, y, force)
   e.enraged = nil
   e.slow, e.flash, e.kx, e.ky, e.orbT, e.lastProj, e.chainId = 0, 0, 0, 0, -1, 0, 0
   e.root, e.dot, e.dotT, e.pdps, e.pT, e.dotAcc = 0, 0, 0, 0, 0, 0
+  e.rootImm, e.zw, e.zt = 0, nil, -1
   e.dotSrc, e.pSrc = nil, nil
   e.dead, e.face, e.tex = false, 1, nil
   e.aiS, e.aiT, e.ux, e.uy, e.corr, e.corrGen, e.gone = 0, 0, 0, 0, nil, nil, false -- ai state, corruption, silent removal
@@ -843,7 +851,12 @@ function W.nova(S, w, dt)
     local e = q[i]
     if w.slow > 0 then
       local sl = w.slow * (S.ccMul or 1)
-      if w.root and not e.def.boss then e.root = sl else e.slow = sl end
+      if w.root and not e.def.boss and S.t >= (e.rootImm or 0) then
+        local r = e.def.elite and sl * 0.5 or sl
+        e.root, e.rootImm = r, S.t + r + 2.5
+      else
+        Sim.Slow(e, sl)
+      end
     end
     damage(S, e, w.dmg)
   end
@@ -996,7 +1009,7 @@ local HIT = {}
 function HIT.chill(S, pr, e)
   local sl = pr.w.slow or 1
   sl = sl * (S.ccMul or 1)
-  if e.slow < sl then e.slow = sl end
+  Sim.Slow(e, sl)
 end
 -- heals the player per enemy hit (Death Coil); w.heal per hit, like Drain Life's per-tick heal
 function HIT.heal(S, pr, e)
@@ -1414,8 +1427,11 @@ local function stepZones(S, dt)
         local n = query(S, z.x, z.y, z.r, q)
         for k = 1, n do
           local e = q[k]
-          if w.slow and e.slow < w.slow * (S.ccMul or 1) then e.slow = w.slow * (S.ccMul or 1) end
-          damage(S, e, w.dmg)
+          if e.zw ~= w or S.t - e.zt >= w.tick * 0.9 then
+            e.zw, e.zt = w, S.t
+            if w.slow then Sim.Slow(e, w.slow * (S.ccMul or 1)) end
+            damage(S, e, w.dmg)
+          end
         end
         if w.def.rain then S.hooks.fx(S, "rain", z.x, z.y, z.r, w) end
       end

@@ -278,6 +278,7 @@ C.WEAPONS = {
   },
 }
 C.MAX_WEAPON_LEVEL = 6
+C.AREA_CAP = 1.9         -- area multiplier cap (passive + shop + Limit Break)
 
 -- Mage, Warlock and Hunter skills. New types: missile (homing), zone (ground area that ticks), dot (spreading
 -- curse), beam (channel on the nearest enemy), fan (spread of projectiles), trap (mines), pet (a minion with
@@ -323,13 +324,13 @@ local NEW_WEAPONS = {
   blizzard = {
     type = "zone", name = "Blizzard", icon = "Interface\\Icons\\Spell_Frost_IceStorm",
     desc = "Ice storms the thickest pack of enemies, hurting and slowing them.", zoneSprite = "blizzard", color = { 0.6, 0.85, 1 },
-    base = { dmg = 6, cd = 4.5, count = 1, radius = 70, dur = 3, tick = 0.5, slow = 1.0, delay = 0 },
+    base = { dmg = 5, cd = 4.5, count = 1, radius = 70, dur = 3, tick = 0.5, slow = 1.0, delay = 0 },
     levels = {
       [2] = { radius = 15, text = "+20% area" },
       [3] = { dmg = 3, text = "+3 damage" },
       [4] = { count = 1, text = "+1 storm" },
       [5] = { dur = 1.5, cdMul = 0.85, text = "Lasts longer, -15% cooldown" },
-      [6] = { dmg = 4, radius = 20, text = "+4 damage, bigger" },
+      [6] = { dmg = 3, radius = 10, text = "+3 damage, bigger" },
     },
   },
   frostnova = {
@@ -475,7 +476,7 @@ for id, d in pairs(NEW_WEAPONS) do C.WEAPONS[id] = d end
 local EVOLVED = {
   frostbolt_evo = { type = "proj", name = "Frostfire Bolt", icon = "Interface\\Icons\\Ability_Mage_FrostFireBolt",
     desc = "Evolved Frostbolt: more, faster, piercing bolts that chill.", sprite = "frostbolt", hit = "chill", color = { 0.7, 0.75, 1 },
-    base = { dmg = 34, cd = 0.6, count = 4, speed = 420, pierce = 3, life = 1.5, size = 30, slow = 2.5 } },
+    base = { dmg = 28, cd = 0.65, count = 4, speed = 420, pierce = 3, life = 1.5, size = 30, slow = 1.5 } },
   fireball_evo = { type = "proj", name = "Pyroblast", icon = "Interface\\Icons\\Spell_Fire_Fireball02",
     desc = "Evolved Fireball: huge explosions.", sprite = "fireball", hit = "explode", color = { 1, 0.45, 0.1 },
     base = { dmg = 60, cd = 1.4, count = 2, speed = 320, pierce = 1, life = 1.6, size = 40, radius = 110, splash = 1 } },
@@ -484,10 +485,10 @@ local EVOLVED = {
     base = { dmg = 18, cd = 1.0, count = 10, speed = 380, pierce = 2, life = 1.8, size = 24, turn = 8 } },
   blizzard_evo = { type = "zone", name = "Frozen Tempest", icon = "Interface\\Icons\\Spell_Frost_FrozenOrb",
     desc = "Evolved Blizzard: three great storms.", zoneSprite = "blizzard", color = { 0.65, 0.9, 1 },
-    base = { dmg = 16, cd = 3.5, count = 3, radius = 125, dur = 5, tick = 0.4, slow = 1.5, delay = 0 } },
+    base = { dmg = 11, cd = 3.8, count = 2, radius = 100, dur = 3.5, tick = 0.5, slow = 1.2, delay = 0 } },
   frostnova_evo = { type = "nova", name = "Deep Freeze", icon = "Interface\\Icons\\Spell_Frost_Glacier",
     desc = "Evolved Frost Nova: freezes a huge area.", color = { 0.65, 0.9, 1 },
-    base = { dmg = 45, cd = 3.5, radius = 185, slow = 3.0, root = 1 } },
+    base = { dmg = 40, cd = 4.5, radius = 150, slow = 2.0, root = 1 } },
   shadowbolt_evo = { type = "proj", name = "Chaos Bolt", icon = "Interface\\Icons\\Ability_Warlock_ChaosBolt",
     desc = "Evolved Shadow Bolt: bolts that tear through everything.", sprite = "shadowbolt", color = { 0.8, 0.45, 1 },
     base = { dmg = 36, cd = 1.0, count = 3, speed = 400, pierce = 4, life = 1.6, size = 34 } },
@@ -496,7 +497,7 @@ local EVOLVED = {
     base = { dmg = 6, cd = 1.5, count = 6, dot = 14, dotDur = 6, spread = 3, range = 170, jumps = 2 } },
   rainfire_evo = { type = "zone", name = "Hellfire Rain", icon = "Interface\\Icons\\Spell_Fire_FelFlameStrike",
     desc = "Evolved Rain of Fire: a downpour of fel fire.", zoneSprite = "felfire", color = { 0.55, 1, 0.3 },
-    base = { dmg = 13, cd = 2.6, count = 5, radius = 72, dur = 3, tick = 0.45, delay = 0.4 } },
+    base = { dmg = 10, cd = 2.8, count = 4, radius = 64, dur = 3, tick = 0.5, delay = 0.4 } },
   drainlife_evo = { type = "beam", name = "Drain Soul", icon = "Interface\\Icons\\Spell_Shadow_Haunting",
     desc = "Evolved Drain Life: drains four enemies at once.", color = { 0.5, 1, 0.5 },
     base = { dmg = 12, tick = 0.25, range = 300, heal = 0.4, count = 3 } },
