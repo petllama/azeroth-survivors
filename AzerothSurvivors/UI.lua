@@ -322,8 +322,14 @@ function UI.Init(frame)
     o.rows[i] = r
   end
   o.ach = font(o, 13)
-  o.ach:SetPoint("TOP", 0, -456)
+  o.ach:SetPoint("TOP", 0, -450)
   o.ach:SetWidth(760)
+  -- final build tally (to debug broken builds from a screenshot)
+  o.build = font(o, 11, "")
+  o.build:SetPoint("TOP", 0, -474)
+  o.build:SetWidth(940)
+  o.build:SetJustifyH("LEFT")
+  o.build:SetSpacing(3)
   local again = font(o, 16)
   again:SetPoint("BOTTOM", 0, 30)
   again:SetText("|cff00ff00SPACE|r play again     |cffffd100C|r change class     |cffffd100ESC|r close")
@@ -558,6 +564,55 @@ function UI.LevelUp(S, banishMode)
 end
 
 -- "Might +12%  Health +30  ..." for the HUD and the pause screen ("" with no stacks)
+-- Final tally of a run's build (results screen and /azs build): skills, passives, Limit Break, effective stats,
+-- shop ranks, curses. Plain lines with colour codes; for spotting broken builds from a screenshot.
+local function ownerClass(id)
+  for cid, cd in pairs(C.CLASSES) do
+    for _, k in ipairs(cd.kit) do if k == id then return cid end end
+  end
+  for _, r in ipairs(C.EVOLUTIONS or {}) do if r.into == id then return ownerClass(r.weapon) end end
+end
+
+function UI.BuildTally(S)
+  local lines = {}
+  local sk = {}
+  for _, w in ipairs(S.wlist) do
+    local d = w.def
+    local oc = ownerClass(w.id)
+    local foreign = oc and oc ~= S.class and C.CLASSES[oc] and (" |cff999999(" .. C.CLASSES[oc].name .. ")|r") or ""
+    sk[#sk + 1] = (d.evolved and ("|cffffd100" .. d.name .. " EVO|r") or (d.name .. " " .. w.level)) .. foreign
+  end
+  lines[#lines + 1] = "|cffffd100Skills|r  " .. (#sk > 0 and table.concat(sk, ", ") or "none")
+  local ps = {}
+  for _, id in ipairs(S.plist) do ps[#ps + 1] = C.PASSIVES[id].name .. " " .. S.passives[id] end
+  local ban = {}
+  for id in pairs(S.banished or {}) do
+    ban[#ban + 1] = (C.WEAPONS[id] and C.WEAPONS[id].name) or (C.PASSIVES[id] and C.PASSIVES[id].name) or id
+  end
+  table.sort(ban)
+  lines[#lines + 1] = "|cffffd100Passives|r  " .. (#ps > 0 and table.concat(ps, ", ") or "none")
+    .. (#ban > 0 and ("     |cffffd100Banished|r  " .. table.concat(ban, ", ")) or "")
+  local lb = UI.LimitLine(S)
+  if lb ~= "" then lines[#lines + 1] = "|cffffbf4d" .. lb .. "|r" end
+  local p = S.p
+  lines[#lines + 1] = string.format("|cffffd100Stats|r  damage x%.2f   cooldown x%.2f   area x%.2f   crit %d%%   speed %d   max HP %d   armor %d   regen %.1f/s   pickup %d%s",
+    p.might, p.haste, p.area, floor(p.crit * 100 + 0.5), floor(p.speed + 0.5), floor(p.maxhp + 0.5), p.armor or 0, p.regen or 0,
+    floor(p.magnet + 0.5), (S.amount or 0) > 0 and ("   +" .. S.amount .. " projectiles") or "")
+  local shop = {}
+  for _, it in ipairs(C.SHOP) do
+    local r = S.meta and S.meta[it.id] or 0
+    if r > 0 then shop[#shop + 1] = it.name .. " " .. r end
+  end
+  local cur = {}
+  for _, c in ipairs(C.CURSES) do if S.curses and S.curses[c.id] then cur[#cur + 1] = c.name end end
+  lines[#lines + 1] = "|cffffd100Shop|r  " .. (#shop > 0 and table.concat(shop, ", ") or "none")
+    .. "     |cffffd100Curses|r  " .. (#cur > 0 and table.concat(cur, ", ") or "none")
+    .. string.format("     |cffffd100Left|r  %d reroll%s, %d skip%s, %d revive%s",
+      S.rerolls or 0, (S.rerolls or 0) == 1 and "" or "s", S.skips or 0, (S.skips or 0) == 1 and "" or "s",
+      S.revives or 0, (S.revives or 0) == 1 and "" or "s")
+  return lines
+end
+
 function UI.LimitLine(S)
   local parts = {}
   for _, l in ipairs(C.LIMIT) do
@@ -629,6 +684,7 @@ function UI.Over(S, won, res)
   local names = {}
   for _, a in ipairs(res.ach or {}) do names[#names + 1] = a.name end
   o.ach:SetText(#names > 0 and ("Achievements earned: |cffffd100" .. table.concat(names, ", ") .. "|r") or "")
+  o.build:SetText(table.concat(UI.BuildTally(S), "\n"))
   UI.Show("over")
 end
 

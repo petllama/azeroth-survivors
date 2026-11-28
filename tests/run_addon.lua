@@ -1014,6 +1014,20 @@ do
   local found
   for _, r in ipairs(UI.panels.over.rows) do if r._shown and r.name._text == "Bomb" then found = true end end
   assert(found, "results screen should label bomb damage Bomb (bombs come from braziers)")
+  do -- build tally on the results screen and /azs build
+    local o = ns.UI.panels.over
+    local txt = o.build._text or ""
+    assert(txt:find("Skills", 1, true) and txt:find("Passives", 1, true) and txt:find("Stats", 1, true)
+      and txt:find("damage x", 1, true) and txt:find("Shop", 1, true), "results screen shows the build tally: " .. txt:sub(1, 80))
+    local printed = {}
+    local oldPrint = print
+    print = function(x) printed[#printed + 1] = tostring(x) end
+    SlashCmdList.AZEROTHSURVIVORS("build")
+    print = oldPrint
+    local all = table.concat(printed, "\n")
+    assert(all:find("build", 1, true) and all:find("Skills", 1, true) and all:find("Stats", 1, true), "/azs build prints the tally: " .. all:sub(1, 120))
+    oldPrint("tally ok: " .. #printed .. " lines")
+  end
   print("merge ok: frostbolt/wolf/imp evolve via chest, evolved pets fight, no 'other' damage for 6 classes, Bomb row")
 end
 -- 0.6 progression: Limit Break, Endless, the new shop items and prestige ranks, Ascension, kill-pop mirroring

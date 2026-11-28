@@ -151,6 +151,7 @@ local hooks = {
       if not s.won10 or s.endless then ns.Social.OnRunEnd(s, won) end -- a cash-out was sent at 10:00
     end
     UI.Over(s, won, res)
+    ns.lastTally = { class = C.CLASSES[s.class].name, t = s.t, won = won, lines = UI.BuildTally(s) }
     ns.Sfx(won and "victory" or "death")
   end,
 }
@@ -706,6 +707,13 @@ SlashCmdList.AZEROTHSURVIVORS = function(msg)
     P("sound " .. (ns.db.sound and "on" or "off"))
   elseif cmd == "board" then
     ns.Social.PrintBoard()
+  elseif cmd == "build" then
+    -- the current run's build, or the last finished run's
+    local live = S and not S.stress and (mode == "play" or mode == "pause" or mode == "levelup" or mode == "chest" or mode == "victory")
+    local tl = live and { class = C.CLASSES[S.class].name, t = S.t, lines = UI.BuildTally(S), now = true } or ns.lastTally
+    if not tl then P("no run yet") return end
+    P(string.format("%s build (%s, %d:%02d):", tl.now and "current" or "last", tl.class, math.floor(tl.t / 60), math.floor(tl.t) % 60))
+    for _, l in ipairs(tl.lines) do print("  " .. l) end
   elseif cmd == "flight" then
     ns.db.flightOffer = not ns.db.flightOffer
     P("offer to play on flights " .. (ns.db.flightOffer and "on" or "off"))
@@ -719,7 +727,7 @@ SlashCmdList.AZEROTHSURVIVORS = function(msg)
     frame:SetPoint("CENTER")
     P("window position reset")
   else
-    P("/azs  open/close   /azs stress N  stress test with N enemies   /azs debug  fps overlay   /azs anim  animations on/off   /azs numbers  damage numbers   /azs sound  sound on/off   /azs board  guild leaderboard   /azs flight  offer to play on flights   /azs save | load  quick save / load   /azs scale 0.8   /azs reset")
+    P("/azs  open/close   /azs stress N  stress test with N enemies   /azs debug  fps overlay   /azs anim  animations on/off   /azs numbers  damage numbers   /azs sound  sound on/off   /azs board  guild leaderboard   /azs build  skills, passives and stats of the run   /azs flight  offer to play on flights   /azs save | load  quick save / load   /azs scale 0.8   /azs reset")
   end
 end
 

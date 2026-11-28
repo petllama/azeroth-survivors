@@ -2,7 +2,7 @@
 ## Title: Azeroth Survivors
 ## Notes: A Vampire Survivors-style arcade game inside WoW. /azs to play.
 ## Author: petllama
-## Version: 0.6.1
+## Version: 0.6.2
 ## SavedVariables: AzerothSurvivorsDB
 ## AddonCompartmentFunc: AzerothSurvivors_OnAddonCompartmentClick
 ## IconTexture: Interface\Icons\Spell_Shadow_RaiseDead

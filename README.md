@@ -2,7 +2,7 @@
 
 A Vampire Survivors-style arcade game that runs inside WoW: Forever as an addon. Survive the Scourge for 10 minutes; spells cast themselves, you move and pick upgrades.
 
-Version 0.5.0 has six classes with 30 skills and 30 evolutions, treasure chests, gold and a permanent Shop, optional curses, map events (skeleton rings, a gold goblin, braziers with pickups), new enemies (skeleton mages, charging worgen, splitting oozes), arenas themed on the zone you play in, a results screen with damage per skill, achievements with unlocks, a guild leaderboard and sound effects.
+Version 0.5.0 has six classes with 30 skills and 30 evolutions, treasure chests, gold and a permanent Shop, optional curses, map events (skeleton rings, a gold goblin, braziers with pickups), new enemies (skeleton mages, charging worgen, splitting oozes), arenas themed on the zone you play in, a results screen with damage per skill and the final build (skills, passives, stats), achievements with unlocks, a guild leaderboard and sound effects.
 
 Version 0.6.0 adds progression for players who have won it all: **Limit Break** level-ups once everything is maxed, an **Endless** mode after the win at 10:00, a bigger **Shop** (Revival, Amount, Cooldown, Area, Luck, Banish, Magnet, and prestige ranks 6-10) and **Ascension** levels A1-A10 per class.
 
@@ -26,7 +26,7 @@ On the game-over screen `SPACE` replays the same class and `C` returns to class 
 
 **Flights:** like Polestar's Freedoom Arcade. On a flight with a minute or more to go (out of combat, outside instances) a small card asks *Do you want to play Azeroth Survivors while waiting?* (Play, Not now, Don't ask again); after that a *Play Azeroth Survivors* button stays while you fly. When the flight time is known (learned on an earlier landing of that route, or taken from Polestar's own flight recordings), the run is saved, paused and closed ten seconds before landing; on a route with only an estimate (first flight, no Polestar record) it stays open until you actually land. A fight on the way or the landing itself also saves, pauses and closes it, so your keys are yours again. It sits under Polestar's flight timer when that is shown. `/azs flight` turns the offer on or off.
 
-Other commands: `/azs save` / `/azs load`, `/azs flight`, `/azs sound` (sound effects on/off), `/azs board` (guild leaderboard in chat), `/azs anim` (movement animations on/off), `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (stress test with 600 enemies, invulnerable), `/azs numbers` (damage numbers on/off), `/azs scale 0.8`, `/azs reset` (window position).
+Other commands: `/azs save` / `/azs load`, `/azs flight`, `/azs sound` (sound effects on/off), `/azs board` (guild leaderboard in chat), `/azs build` (skills, passives, Limit Break and stats of the current or last run), `/azs anim` (movement animations on/off), `/azs debug` (fps / sim / draw ms overlay), `/azs stress 600` (stress test with 600 enemies, invulnerable), `/azs numbers` (damage numbers on/off), `/azs scale 0.8`, `/azs reset` (window position).
 
 ## Classes
 
